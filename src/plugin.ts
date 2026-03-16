@@ -16,9 +16,9 @@
     along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
-import { Application, IPlugin } from '@phosphor/application';
+import { Application, IPlugin } from '@lumino/application';
 
-import { Widget } from '@phosphor/widgets';
+import { Widget } from '@lumino/widgets';
 
 import { IJupyterWidgetRegistry } from '@jupyter-widgets/base';
 

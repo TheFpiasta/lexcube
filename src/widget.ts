@@ -707,7 +707,7 @@ export class Cube3DView extends DOMWidgetView {
 
     render(): void {
         this.el.innerHTML = template;
-        this.cubeClientContext = new CubeClientContext(true, this.el.getElementsByClassName("lexcube-body")[0] as HTMLElement, this.model.get("isometric_mode"));
+        this.cubeClientContext = new CubeClientContext(true, this.el.getElementsByClassName("lexcube-body")[0] as HTMLElement, this.model.get("isometric_mode"), this.model.get("cube_scale"));
         const featureCheck = this.cubeClientContext.checkForFeatures();
         console.log("LexCube feature check:", featureCheck ? "Success" : "Failed");
         if (!featureCheck.success) {
@@ -718,6 +718,7 @@ export class Cube3DView extends DOMWidgetView {
 
         this.cubeClientContext.widgetPostStartup = this.postStartup.bind(this);
         this.cubeClientContext.interaction.updateWidgetModelRanges = this.updateWidgetRanges.bind(this);
+        this.cubeClientContext.interaction.updateWidgetCameraAngle = this.updateWidgetCameraAngle.bind(this);
         this.cubeClientContext.interaction.updateWidgetModelColormapRange = this.updateColormapRange.bind(this);
         this.cubeClientContext.rendering.updateWidgetModelDimensionWrapSettings = this.updateDimensionWrapSettings.bind(this);
         this.cubeClientContext.interaction.updateWidgetColormap = this.updateColormap.bind(this);
@@ -743,6 +744,7 @@ export class Cube3DView extends DOMWidgetView {
         this.model.on('change:zwrap', this.dimensionWrapSettingsChanged, this);
 
         this.model.on('change:widget_size', this.widgetSizeChanged, this);
+        this.model.on('change:camera_angle', this.cameraAngleChanged, this);
 
         this.model.on('msg:custom', this.handleMessage, this);
 
@@ -755,6 +757,7 @@ export class Cube3DView extends DOMWidgetView {
         this.colormapMaxChanged();
         this.widgetRangeChanged();
         this.updateWidgetRanges();
+        this.cameraAngleChanged();
         this.dimensionWrapSettingsChanged(true);
         this.regionBordersChanged();
         this.regionBordersColorChanged();
@@ -790,6 +793,20 @@ export class Cube3DView extends DOMWidgetView {
         this.cubeClientContext.rendering.setWidgetSize(size[0] * 80, size[1] * 80); // inch to pixels at default DPI
     }
 
+    private cameraAngleChanged(): void {
+        const cameraAngle = this.getModelValue("camera_angle");
+        if (cameraAngle.length != 6 || cameraAngle.some((v: any) => typeof v !== "number") || cameraAngle.every((v: any) => v === 0)) {
+            this.cubeClientContext.interaction.applyCameraPreset(undefined, undefined, undefined, true);
+            this.cubeClientContext.rendering.updateVisibilityAndLods();
+            this.updateWidgetCameraAngle(); // sending changes back to model
+            return;
+        }
+        const position = { x: cameraAngle[0], y: cameraAngle[1], z: cameraAngle[2] };
+        const rotation = { x: cameraAngle[3], y: cameraAngle[4], z: cameraAngle[5] };
+        this.cubeClientContext.interaction.applyCameraPreset(undefined, undefined, { position, rotation }, true);
+        this.cubeClientContext.rendering.updateVisibilityAndLods();
+    }
+
     dimensionWrapSettingsChanged(allowWidgetPropertyUpdate: boolean = false): void {
         this.cubeClientContext.rendering.updateOverflowSettings(this.getModelValue("xwrap"), this.getModelValue("ywrap"), this.getModelValue("zwrap"), allowWidgetPropertyUpdate);
     }
@@ -808,10 +825,18 @@ export class Cube3DView extends DOMWidgetView {
         const xRange = this.cubeClientContext.interaction.cubeSelection.getSelectionRangeByDimension(Dimension.X);
         const yRange = this.cubeClientContext.interaction.cubeSelection.getSelectionRangeByDimension(Dimension.Y);
         const zRange = this.cubeClientContext.interaction.cubeSelection.getSelectionRangeByDimension(Dimension.Z);
-        this.model.set({ 'xlim': [xRange.min, xRange.max], 'ylim': [yRange.min, yRange.max], 'zlim': [zRange.min, zRange.max] }, { silent: true}); 
+        this.model.set({ 'xlim': [xRange.min, xRange.max], 'ylim': [yRange.min, yRange.max], 'zlim': [zRange.min, zRange.max] }, { silent: true }); 
         this.model.save_changes();
     }
 
+    private updateWidgetCameraAngle(): void {
+        const targetPrecision = 3;
+        const c = this.cubeClientContext.rendering.getCurrentCamera();
+        const p = c.position.toArray().map((v, i) => parseFloat(v.toFixed(targetPrecision)));
+        const r = [c.rotation.x, c.rotation.y, c.rotation.z].map((v, i) => parseFloat(v.toFixed(targetPrecision)));
+        this.model.set({ 'camera_angle': p.concat(r) }, { silent: true });
+        this.model.save_changes();
+    }
 
     private getModelValue(key: string) {
         const v = this.model.get(key);

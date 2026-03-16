@@ -14,9 +14,9 @@ const STATE = {
   TOUCH_PAN: 5
 };
 
-const CHANGE_EVENT = { type: 'change' };
-const START_EVENT = { type: 'start' };
-const END_EVENT = { type: 'end' };
+const CHANGE_EVENT: THREE.BaseEvent = { type: 'change' };
+const START_EVENT: THREE.BaseEvent = { type: 'start' };
+const END_EVENT: THREE.BaseEvent = { type: 'end' };
 const EPS = 0.000001;
 
 /**
@@ -33,7 +33,7 @@ const EPS = 0.000001;
 *    Zoom - middle mouse, or mousewheel / touch: two finger spread or squish
 *    Pan - right mouse, or arrow keys / touch: three finger swipe
 */
-export class OrbitControls extends THREE.EventDispatcher {
+export class OrbitControls extends THREE.EventDispatcher<any> {
   object: THREE.Camera;
   domElement: HTMLElement | HTMLDocument;
   window: Window;
@@ -481,8 +481,16 @@ export class OrbitControls extends THREE.EventDispatcher {
     this.update();
   }
 
-  update () {
+  update (reconstructTargetFromRotation: boolean = false) {
     const position = this.object.position;
+    
+    if (reconstructTargetFromRotation) {
+      // walk from object position in direction of object rotation to set the target
+      const newtarget = new THREE.Vector3(0, 0, -1).applyEuler(this.object.rotation).multiplyScalar(this.object.position.length()).add(this.object.position);
+      this.target.copy(newtarget);
+      this.spherical.radius = this.object.position.distanceTo(this.target);
+    }
+
     this.updateOffset.copy( position ).sub( this.target );
 
     // rotate offset to "y-axis-is-up" space

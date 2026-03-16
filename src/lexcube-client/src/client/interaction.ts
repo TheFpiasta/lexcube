@@ -1026,9 +1026,14 @@ class CubeSelection {
         this.displayOffsets = [];
         const dims = this.context.interaction.cubeDimensions;
         const is = this.context.interaction.initialSelectionState;
+        this.xSelectionRange = dims.xParameterRange.clone();
         this.ySelectionRange = dims.yParameterRange.clone();
         if (!context.widgetMode) {
-            this.xSelectionRange = new ParameterRange(0, context.interaction.roundDownToSparsity(dims.xParameterRange.max / context.interaction.XYdataAspectRatio) + 1, true);
+            if (context.interaction.XYdataAspectRatio > 1.0) {
+                this.xSelectionRange = new ParameterRange(0, context.interaction.roundDownToSparsity(dims.xParameterRange.max / context.interaction.XYdataAspectRatio) + 1, true);
+            } else {
+                this.ySelectionRange = new ParameterRange(0, context.interaction.roundDownToSparsity(dims.yParameterRange.max * context.interaction.XYdataAspectRatio) + 1, true);
+            }
         } else {
             this.xSelectionRange = dims.xParameterRange.clone();
         }
@@ -1446,6 +1451,7 @@ class CubeInteraction {
     private htmlParent: HTMLElement;
 
     updateWidgetModelRanges: () => void = () => { };
+    updateWidgetCameraAngle: () => void = () => { };
 
     private htmlAnimationRecordingCheckbox!: HTMLInputElement;
     private htmlAnimationRecordingCheckboxLabel!: HTMLElement;
@@ -1709,8 +1715,9 @@ class CubeInteraction {
         this.orbitControls.addEventListener("end", this.requestUrlFragmentUpdate.bind(this));
         this.orbitControls.addEventListener("end", () => {
             window.setTimeout(() => {
-                this.updateLabelPositions();
+                this.updateLabelPositions(); // delay for camera matrix to catch up
             }, 25);
+            this.updateWidgetCameraAngle();
         });
 
         const isOverBackground = (position: Vector2) => {
@@ -1976,7 +1983,7 @@ class CubeInteraction {
     }
 
     onZoom(eventPositions: (MouseEvent | Touch)[], zoomDelta: number, immediate: boolean = false) {
-        let ray: Intersection<Object3D<Event>>[];
+        let ray: Intersection<Object3D>[];
         for (let i = 0; i < eventPositions.length; i++) {
             // position = eventPositions[i];             
             const localEventPosition = this.getLocalEventPosition(eventPositions[i]);
@@ -3319,6 +3326,7 @@ class CubeInteraction {
         this.context.log("Selected cube meta:", meta);
         this.context.rendering.updateOverflowSettings(this.cubeTags.includes(CubeTag.OverflowX), false, false);
         this.XYdataAspectRatio = this.context.widgetMode ? 1.0 : this.cubeDimensions.x.steps / this.cubeDimensions.y.steps;
+        this.context.log("XYdataAspectRatio:", this.XYdataAspectRatio);
         this.context.log("Cube tags:", this.cubeTags.map(a => CubeTag[a]));
         this.updateAvailableParametersUi();
 
@@ -3349,7 +3357,7 @@ class CubeInteraction {
         return false;
     }
 
-    applyCameraPreset(presetName: string = "", cameraOverride: PerspectiveCamera | OrthographicCamera | undefined = undefined): void {
+    applyCameraPreset(presetName: string = "", cameraOverride: PerspectiveCamera | OrthographicCamera | undefined = undefined, presetOverride: { position: { x: number, y: number, z: number }; rotation: { x: number, y: number, z: number } } | undefined = undefined, fromWidgetMode: boolean = false): void {
         const defaultPresetIndex = 3;
         let presetIndex = this.context.scriptedMultiViewMode ? 5 : defaultPresetIndex;
         const urlPreset = document.URL.match(/camera=(\w+)/);
@@ -3358,22 +3366,22 @@ class CubeInteraction {
         } else if (urlPreset && urlPreset.length > 0) {
             presetIndex = this.cameraPresets.findIndex(c => c.name == `Single Face (${urlPreset[1]})`)
         }
-        const c = this.cameraPresets[presetIndex];
-        this.context.log("Applying camera preset", c.name);
-        let position = c.position.clone();
+        const c = presetOverride || this.cameraPresets[presetIndex];
+        this.context.log("Applying camera preset", "name" in c ? c.name : `custom preset (${JSON.stringify(c)})`);
+
+        let position = new Vector3(c.position.x, c.position.y, c.position.z);
+        const rotation = new Euler(c.rotation.x, c.rotation.y, c.rotation.z);
         const camera = cameraOverride || this.context.rendering.mainCamera;
-        if (presetIndex == defaultPresetIndex && !this.context.rendering.printTemplateDownloading && !this.context.isometricMode) {
+        if (presetIndex == defaultPresetIndex && !this.context.rendering.printTemplateDownloading && !this.context.isometricMode && !presetOverride) {
             this.context.rendering.adjustCameraPresetToCube(position);
         }
-        camera.rotation.copy(c.rotation);
-        camera.position.set(position.x, position.y, position.z);
-        if (camera.zoom) {
-            camera.zoom = 1;
-        }
+        camera.rotation.copy(rotation);
+        camera.position.copy(position);
+        camera.zoom = 1;
         camera.updateMatrixWorld();
         camera.updateProjectionMatrix();
         if (!this.context.rendering.printTemplateDownloading) {
-            this.orbitControls.update();
+            this.orbitControls.update(fromWidgetMode);
         }
         this.context.rendering.requestRender();
     }
@@ -3744,7 +3752,12 @@ class CubeInteraction {
         let height = this.cubeDimensions.yParameterRangeForFace(face).length();
         const dataAspectRatio = (face == CubeFace.Front || face == CubeFace.Back || face == CubeFace.Top || face == CubeFace.Bottom) ? this.XYdataAspectRatio : 1.0;
         const minDisplaySize = new Vector2(width * Math.pow(0.5, MAX_ZOOM_FACTOR) / dataAspectRatio, height * Math.pow(0.5, MAX_ZOOM_FACTOR));
-        const maxDisplaySize = new Vector2(this.roundDownToSparsity(width / dataAspectRatio), this.roundDownToSparsity(height));
+        let maxDisplaySize = new Vector2();
+        if (dataAspectRatio > 1.0) {
+            maxDisplaySize = new Vector2(this.roundDownToSparsity(width / dataAspectRatio), this.roundDownToSparsity(height));
+        } else {
+            maxDisplaySize = new Vector2(this.roundDownToSparsity(width), this.roundDownToSparsity(height * dataAspectRatio));
+        }
         return { maxDisplaySize, minDisplaySize };
     }
 

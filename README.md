@@ -40,29 +40,36 @@ Example notebooks can be found in the [examples](https://github.com/msoechting/l
 - [Table-of-Contents](#table-of-contents)
 - [Attribution](#attribution)
 - [How to Use Lexcube](#how-to-use-lexcube)
-    - [Example Notebooks](#example-notebooks)
-    - [Getting Started - Minimal Example](#getting-started---minimal-example)
+  - [Example Notebooks](#example-notebooks)
+  - [Getting Started - Minimal Example](#getting-started---minimal-example)
+    - [Visualizing Xarray Data](#visualizing-xarray-data)
+    - [Visualizing Numpy Data](#visualizing-numpy-data)
+    - [Visualizing Google Earth Engine Data](#visualizing-google-earth-engine-data)
+    - [Note on Google Collab](#note-on-google-collab)
+    - [Note on Juypter for VSCode](#note-on-juypter-for-vscode)
 - [Installation](#installation)
 - [Cube Visualization](#cube-visualization)
 - [Interacting with the Cube](#interacting-with-the-cube)
 - [Range Boundaries](#range-boundaries)
 - [Colormaps](#colormaps)
-    - [Supported colormaps](#supported-colormaps)
+  - [Supported colormaps](#supported-colormaps)
+- [Scaling the cube to fit your data](#scaling-the-cube-to-fit-your-data)
 - [Overlay GeoJSON data](#overlay-geojson-data)
 - [Save figures](#save-figures)
+- [Saving camera angles \& reproducing figures](#saving-camera-angles--reproducing-figures)
 - [Print your own paper data cube](#print-your-own-paper-data-cube)
 - [Get currently visible data subset](#get-currently-visible-data-subset)
 - [Supported metadata](#supported-metadata)
 - [Troubleshooting](#troubleshooting)
-    - [The cube does not respond / API methods are not doing anything / Cube does not load new data](#the-cube-does-not-respond-api-methods-are-not-doing-anything-cube-does-not-load-new-data)
-    - [After installation/update, no widget is shown, only text](#after-installationupdate-no-widget-is-shown-only-text)
-    - [w.savefig breaks when batch-processing/trying to create many figures quickly](#wsavefig-breaks-when-batch-processingtrying-to-create-many-figures-quickly)
-    - [The layout of the widget looks very messed up](#the-layout-of-the-widget-looks-very-messed-up)
-    - ["Error creating WebGL context" or similar](#error-creating-webgl-context-or-similar)
-    - [Memory is filling up a lot when using a chunked dataset](#memory-is-filling-up-a-lot-when-using-a-chunked-dataset)
+  - [The cube does not respond / API methods are not doing anything / Cube does not load new data](#the-cube-does-not-respond--api-methods-are-not-doing-anything--cube-does-not-load-new-data)
+  - [After installation/update, no widget is shown, only text](#after-installationupdate-no-widget-is-shown-only-text)
+  - [w.savefig breaks when batch-processing/trying to create many figures quickly](#wsavefig-breaks-when-batch-processingtrying-to-create-many-figures-quickly)
+  - [The layout of the widget looks very messed up](#the-layout-of-the-widget-looks-very-messed-up)
+  - ["Error creating WebGL context" or similar](#error-creating-webgl-context-or-similar)
+  - [Memory is filling up a lot when using a chunked dataset](#memory-is-filling-up-a-lot-when-using-a-chunked-dataset)
 - [Known bugs](#known-bugs)
 - [Attributions](#attributions)
-- [Development Installation & Guide](#development-installation-guide)
+- [Development Installation \& Guide](#development-installation--guide)
 - [License](#license)
 
 <!-- /TOC -->
@@ -253,6 +260,17 @@ Miscellaneous:
 - "flag", "prism", "ocean", "gist_earth", "terrain", "gist_stern", "gnuplot", "gnuplot2", "CMRmap", "cubehelix", "brg", "gist_rainbow", "rainbow", "jet", "nipy_spectral", "gist_ncar"
 ```
 
+## Scaling the cube to fit your data
+If your dataset is not equally sized across dimensions and looks deformed on the default square cube, you can scale the cube visualization via the `cube_scale` parameter (XYZ order): 
+```python
+# Cube stretched 50% in X dimension and 150% in Y dimension:
+w = lexcube.Cube3DWidget(da, cube_scale=[0.5, 1.5, 1.0])
+
+# Cube stretched very thin in Z dimension:
+w = lexcube.Cube3DWidget(da, cube_scale=[1.0, 1.0, 0.05])
+```
+Keep values under 5.0 for best results (scale down and keep the ratios between XYZ for basically the same result), otherwise the 3D camera might clip the render and not fully show the scaled cube.
+
 ## Overlay GeoJSON data
 You can overlay GeoJSON data onto the cube visualization like this:
 ```python
@@ -301,6 +319,32 @@ w.savefig(fname="cube.png", include_ui=True, dpi_scale=2.0)
 If you want to edit multiple cubes into one picture, you may prefer an isometric rendering (no depth distortion). You can enable it in the widget constructor: `lexcube.Cube3DWidget(data_source, isometric_mode=True)`. For comparison:
 
 ![Isometric vs. perspective camera comparison](https://raw.githubusercontent.com/msoechting/lexcube/main/readme-media/isometric.png)
+
+## Saving camera angles & reproducing figures
+
+For creating scientific figures, reproducing the same cube visualization but with different data is a typical use case.
+In Lexcube, the angle you are looking at the cube determines how the visualization looks like.
+To exactly reproduce a figure with Lexcube, you can save the current camera angle and set it via the constructor or the `camera_angle` property.
+
+```python
+# Open the widget with a specific camera angle
+w = lexcube.Cube3DWidget(da, camera_angle=[2.908, 2.569, -2.809, -2.391, 0.642, 2.632])
+w.show()
+
+# Save the current camera angle
+w.camera_angle
+> [2.83, 1.026, 1.88, -0.529, 0.914, 0.434]
+
+# Reproduce previous camera angle
+w.camera_angle = [2.83, 1.026, 1.88, -0.529, 0.914, 0.434]
+
+# Reset camera angle to default
+w.camera_angle = []
+```
+*Advanced info: camera_angle is a 6-sized list, interpreted as the 3D position (first three values) and the rotation (last three values) of the virtual camera.
+The XYZ in these camera angles is different from the XYZ coordinate system the data is visualized as: camera(X, Y, Z) = data(Z, Y, -X) and vice versa. 
+This is why the default camera position (left, up, in front of the cube -> left = negative data X, up = negative data Y, in front = positive data Z) is X = 1.795 (in front), Y = 0.854 (up), Z = 1.062 (left) in the camera coordinate system.
+The cube is centred at (0,0,0) and sized (1,1,1), if not overriden by `cube_scale`.*
 
 ## Print your own paper data cube
 You can generate a template to make your own paper data cube from your currently visible data cube like this:

@@ -58,7 +58,7 @@ module.exports = [
         path: path.resolve(__dirname, 'dist'),
         libraryTarget: 'amd',
         library: "lexcube",
-        publicPath: 'https://unpkg.com/lexcube@' + version + '/dist/'
+        publicPath: 'https://cdn.jsdelivr.net/npm/lexcube@' + version + '/dist/'
     },
     devtool: 'source-map',
     module: {

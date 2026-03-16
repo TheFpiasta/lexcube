@@ -17,6 +17,7 @@
 */
 
 import * as widgets from '@jupyter-widgets/base';
+import * as baseManager from '@jupyter-widgets/base-manager';
 import * as services from '@jupyterlab/services';
 
 let numComms = 0;
@@ -59,7 +60,7 @@ export class MockComm implements widgets.IClassicComm {
   _on_close: ((x?: any) => void) | null = null;
 }
 
-export class DummyManager extends widgets.ManagerBase<HTMLElement> {
+export class DummyManager extends baseManager.ManagerBase  {
   constructor() {
     super();
     this.el = window.document.createElement('div');

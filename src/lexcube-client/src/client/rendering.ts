@@ -16,7 +16,7 @@
     along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
-import { AmbientLight, BoxGeometry, DataTexture, DataArrayTexture, DirectionalLight, FloatType, Mesh, MeshBasicMaterial, OrthographicCamera, PerspectiveCamera, Raycaster, RedFormat, RGBAFormat, RGBFormat, Scene, ShaderMaterial, Triangle, Vector2, Vector3, WebGLRenderer, Line, BufferGeometry, Object3D, LineBasicMaterial, Frustum, Matrix4, Plane, Box3, LineSegments, Float32BufferAttribute, SphereGeometry, MeshStandardMaterial, CylinderGeometry, AnimationMixer, AnimationClip, NumberKeyframeTrack, KeyframeTrack, InterpolateSmooth, BooleanKeyframeTrack, Clock, AnimationAction, AddEquation, CustomBlending, OneMinusSrcAlphaFactor, SrcAlphaFactor, Color, MaxEquation, OneFactor, MinEquation, AlwaysStencilFunc, ReplaceStencilOp } from 'three'
+import { AmbientLight, BoxGeometry, DataTexture, DataArrayTexture, DirectionalLight, FloatType, Mesh, MeshBasicMaterial, OrthographicCamera, PerspectiveCamera, Raycaster, RedFormat, RGBAFormat, RGBFormat, Scene, ShaderMaterial, Triangle, Vector2, Vector3, WebGLRenderer, Line, BufferGeometry, Object3D, LineBasicMaterial, Frustum, Matrix4, Plane, Box3, LineSegments, Float32BufferAttribute, SphereGeometry, MeshStandardMaterial, CylinderGeometry, AnimationMixer, AnimationClip, NumberKeyframeTrack, KeyframeTrack, InterpolateSmooth, BooleanKeyframeTrack, Clock, AnimationAction, AddEquation, CustomBlending, OneMinusSrcAlphaFactor, SrcAlphaFactor, Color, MaxEquation, OneFactor, MinEquation, AlwaysStencilFunc, ReplaceStencilOp, LoopOnce } from 'three'
 import { clamp, lerp } from 'three/src/math/MathUtils';
 import { toPng, toCanvas, getFontEmbedCSS, toBlob } from 'html-to-image';
 import { ArrayBufferTarget as WebmArrayBufferTarget, Muxer as WebmMuxer } from 'webm-muxer'
@@ -432,10 +432,10 @@ class Edge {
 }
 
 class CubeRendering {
-    private renderer: THREE.WebGLRenderer;
-    mainCamera: THREE.OrthographicCamera | THREE.PerspectiveCamera;
-    private scene: THREE.Scene;
-    cube: THREE.Mesh<THREE.BoxGeometry, THREE.ShaderMaterial[]>;
+    private renderer: WebGLRenderer;
+    mainCamera: OrthographicCamera | PerspectiveCamera;
+    private scene: Scene;
+    cube: Mesh<BoxGeometry, ShaderMaterial[]>;
     
     displayQuality = 1.0;
 
@@ -448,25 +448,26 @@ class CubeRendering {
     
     private colormapData: Uint8Array;
     renderDebugCubes: boolean;
-    debugCubes: THREE.Mesh[];
+    debugCubes: Mesh[];
     private allTilesDownloaded: boolean = false;
     private parent: HTMLElement;
 
     private renderRequested: boolean = true;
     
     private regionBordersTransparency: number = 0.6;
-    private regionBordersFrontMaterial!: THREE.LineBasicMaterial;
-    private regionBordersFrontParent!: THREE.Object3D;
-    private regionBordersFrontActiveLocalParent!: THREE.Object3D;
-    private regionBordersFrontAtDifferentResolutions: Map<NaturalEarthRegionBorderResolution, THREE.Object3D> = new Map<NaturalEarthRegionBorderResolution, THREE.Object3D>();
+    private regionBordersFrontMaterial!: LineBasicMaterial;
+    private regionBordersFrontParent!: Object3D;
+    private regionBordersFrontActiveLocalParent!: Object3D;
+    private regionBordersFrontAtDifferentResolutions: Map<NaturalEarthRegionBorderResolution, Object3D> = new Map<NaturalEarthRegionBorderResolution, Object3D>();
     private currentRegionBorderResolution = 0;
     private regionBorderResolutionsBeingLoaded = new Set<NaturalEarthRegionBorderResolution>();
     private regionBorderFrontSegmentMapBins = 10000;
 
-    private regionBordersDistanceFromCubeCenter = 0.501; // just a bit in front of the cube
+    private regionBordersDistanceFromCubeCenterInRenderWorld: Vector3;
+    private regionBordersDistanceFromCubeCenterOffset: number = 0.001;
 
-    private regionBordersSideMaterial!: THREE.LineBasicMaterial;
-    private regionBordersSideParent!: THREE.Object3D;
+    private regionBordersSideMaterial!: LineBasicMaterial;
+    private regionBordersSideParent!: Object3D;
     
     private maxRangeIndicatorClippingPlanes: Map<CubeFace, Plane> = new Map<CubeFace, Plane>();
     
@@ -560,12 +561,14 @@ class CubeRendering {
         });
         this.renderer.setSize(this.getWidth(), this.getHeight());
         this.renderer.setPixelRatio(window.devicePixelRatio);
-        // this.renderer.setClearColor(new THREE.Color("#000000"), 0);
+        // this.renderer.setClearColor(new Color("#000000"), 0);
         this.parent.appendChild(this.renderer.domElement);
 
         window.addEventListener('resize', this.onWindowResize.bind(this), false)
 
-        const cubeGeometry = new BoxGeometry(1, 1, 1);
+        const scale = this.getCubeScaleInRenderWorld();
+        const cubeGeometry = new BoxGeometry(scale.x, scale.y, scale.z);
+        this.regionBordersDistanceFromCubeCenterInRenderWorld = scale.clone().multiplyScalar(0.5).addScalar(this.regionBordersDistanceFromCubeCenterOffset); // just a bit in front of the cube, based on its scale
 
         const materials = Array.from({ length: 6 }, () => this.newCubeMaterial());
         this.cube = new Mesh(cubeGeometry, materials);
@@ -634,18 +637,22 @@ class CubeRendering {
         }
     }
 
+    private getCubeScaleInRenderWorld() {
+        return new Vector3(this.context.cubeScale[2], this.context.cubeScale[1], this.context.cubeScale[0]);
+    }
+
     private createMaxRangeIndicators() {
         const color = 0xffffff;
         const indicatorWidth = 0.0075;
-        const indicatorLength = 1 + indicatorWidth;
-        const indicatorDistance = 0.5 + indicatorWidth / 2 + 0.0015; // some padding for clipping
+        const indicatorLength = this.getCubeScaleInRenderWorld().addScalar(indicatorWidth);
+        const indicatorDistance = this.getCubeScaleInRenderWorld().multiplyScalar(0.5).addScalar(indicatorWidth / 2 + 0.0015); // some padding for clipping
 
-        this.maxRangeIndicatorClippingPlanes.set(CubeFace.Front, new Plane(new Vector3(1, 0, 0), indicatorDistance));
-        this.maxRangeIndicatorClippingPlanes.set(CubeFace.Back, new Plane(new Vector3(-1, 0, 0), indicatorDistance));
-        this.maxRangeIndicatorClippingPlanes.set(CubeFace.Top, new Plane(new Vector3(0, 1, 0), indicatorDistance));
-        this.maxRangeIndicatorClippingPlanes.set(CubeFace.Bottom, new Plane(new Vector3(0, -1, 0), indicatorDistance));
-        this.maxRangeIndicatorClippingPlanes.set(CubeFace.Left, new Plane(new Vector3(0, 0, 1), indicatorDistance));
-        this.maxRangeIndicatorClippingPlanes.set(CubeFace.Right, new Plane(new Vector3(0, 0, -1), indicatorDistance));
+        this.maxRangeIndicatorClippingPlanes.set(CubeFace.Front, new Plane(new Vector3(1, 0, 0), indicatorDistance.x));
+        this.maxRangeIndicatorClippingPlanes.set(CubeFace.Back, new Plane(new Vector3(-1, 0, 0), indicatorDistance.x));
+        this.maxRangeIndicatorClippingPlanes.set(CubeFace.Top, new Plane(new Vector3(0, 1, 0), indicatorDistance.y));
+        this.maxRangeIndicatorClippingPlanes.set(CubeFace.Bottom, new Plane(new Vector3(0, -1, 0), indicatorDistance.y));
+        this.maxRangeIndicatorClippingPlanes.set(CubeFace.Left, new Plane(new Vector3(0, 0, 1), indicatorDistance.z));
+        this.maxRangeIndicatorClippingPlanes.set(CubeFace.Right, new Plane(new Vector3(0, 0, -1), indicatorDistance.z));
 
         const opacityAnimationTimePoints = [0, 0.8, 1.0]; // Time in seconds
         const opacityAnimationValues = [1.0, 0.3, 0]; // Opacity values at each time point
@@ -667,8 +674,8 @@ class CubeRendering {
         // Create an animation clip
         const clip = new AnimationClip("flash-and-fade", -1, [opacityKF, visibleKF]);
         
-        const makeMesh = (id: string) => {
-            const boxGeometry = new BoxGeometry(indicatorWidth, indicatorLength, indicatorWidth);
+        const makeMesh = (id: string, length: number) => {
+            const boxGeometry = new BoxGeometry(indicatorWidth, length, indicatorWidth);
             const material = new MeshBasicMaterial({ 
                 color: color, 
                 transparent: true, 
@@ -681,7 +688,7 @@ class CubeRendering {
             // Set up an AnimationMixer and play the clip
             const mixer = new AnimationMixer(mesh);
             const action = mixer.clipAction(clip, mesh);
-            action.setLoop(0, 1);
+            action.setLoop(LoopOnce, 1);
 
             this.maxRangeIndicatorAnimationMixers.push(mixer);
             this.maxRangeIndicatorAnimationActions.push(action);
@@ -699,53 +706,55 @@ class CubeRendering {
 
         // Left to right, in default view
         const createIndicatorZ = (x: number, y: number, id: string) => {
-            const mesh = makeMesh(id);
+            const mesh = makeMesh(id, indicatorLength.z);
             mesh.rotation.set(Math.PI / 2, 0, 0);
             mesh.position.set(x, y, 0);
         }
 
         // Down to up, in default view
         const createIndicatorY = (x: number, z: number, id: string) => {
-            const mesh = makeMesh(id);
+            const mesh = makeMesh(id, indicatorLength.y);
             mesh.position.set(x, 0, z);
         }
 
         // Front to back, in default view
         const createIndicatorX = (y: number, z: number, id: string) => {
-            const mesh = makeMesh(id);
+            const mesh = makeMesh(id, indicatorLength.x);
             mesh.position.set(0, y, z);
             mesh.rotation.set(0, 0, Math.PI / 2);
         }
         
-        createIndicatorZ(0.5, 0.5, "front-min-y");
-        createIndicatorZ(0.5, -0.5, "front-max-y");
-        createIndicatorZ(-0.5, 0.5, "back-min-y");
-        createIndicatorZ(-0.5, -0.5, "back-max-y");
+        const o = this.getCubeScaleInRenderWorld().multiplyScalar(0.5);
+
+        createIndicatorZ(o.x, o.y, "front-min-y");
+        createIndicatorZ(o.x, -o.y, "front-max-y");
+        createIndicatorZ(-o.x, o.y, "back-min-y");
+        createIndicatorZ(-o.x, -o.y, "back-max-y");
                 
-        createIndicatorY(0.5, 0.5, "left-max-y");
-        createIndicatorY(0.5, -0.5, "right-max-y");
-        createIndicatorY(-0.5, 0.5, "left-min-y");
-        createIndicatorY(-0.5, -0.5, "right-min-y");
+        createIndicatorY(o.x, o.z, "left-max-y");
+        createIndicatorY(o.x, -o.z, "right-max-y");
+        createIndicatorY(-o.x, o.z, "left-min-y");
+        createIndicatorY(-o.x, -o.z, "right-min-y");
         
-        createIndicatorX(0.5, 0.5, "top-min-x");
-        createIndicatorX(0.5, -0.5, "top-max-x");
-        createIndicatorX(-0.5, 0.5, "bottom-min-x");
-        createIndicatorX(-0.5, -0.5, "bottom-max-x");
+        createIndicatorX(o.y, o.z, "top-min-x");
+        createIndicatorX(o.y, -o.z, "top-max-x");
+        createIndicatorX(-o.y, o.z, "bottom-min-x");
+        createIndicatorX(-o.y, -o.z, "bottom-max-x");
         
-        createIndicatorZ(0.5, 0.5, "top-max-y");
-        createIndicatorZ(0.5, -0.5, "bottom-max-y");
-        createIndicatorZ(-0.5, 0.5, "top-min-y");
-        createIndicatorZ(-0.5, -0.5, "bottom-min-y");
+        createIndicatorZ(o.x, o.y, "top-max-y");
+        createIndicatorZ(o.x, -o.y, "bottom-max-y");
+        createIndicatorZ(-o.x, o.y, "top-min-y");
+        createIndicatorZ(-o.x, -o.y, "bottom-min-y");
                 
-        createIndicatorY(0.5, 0.5, "front-min-x");
-        createIndicatorY(0.5, -0.5, "front-max-x");
-        createIndicatorY(-0.5, 0.5, "back-min-x");
-        createIndicatorY(-0.5, -0.5, "back-max-x");
+        createIndicatorY(o.x, o.z, "front-min-x");
+        createIndicatorY(o.x, -o.z, "front-max-x");
+        createIndicatorY(-o.x, o.z, "back-min-x");
+        createIndicatorY(-o.x, -o.z, "back-max-x");
         
-        createIndicatorX(0.5, 0.5, "left-min-x");
-        createIndicatorX(0.5, -0.5, "right-min-x");
-        createIndicatorX(-0.5, 0.5, "left-max-x");
-        createIndicatorX(-0.5, -0.5, "right-max-x");
+        createIndicatorX(o.y, o.z, "left-min-x");
+        createIndicatorX(o.y, -o.z, "right-min-x");
+        createIndicatorX(-o.y, o.z, "left-max-x");
+        createIndicatorX(-o.y, -o.z, "right-max-x");
     }
 
     private updateMaxRangeIndicatorPositionAndScale() {
@@ -763,12 +772,13 @@ class CubeRendering {
             const currentCenterPoint = currentSize.clone().divideScalar(2).add(currentOffset); 
             
             const zoomRelativeToWorld = new Vector2().copy(worldSize).divide(currentSize);
+            const cubeScale = this.getCubeScaleInRenderWorld();
             
             if (face == CubeFace.Front || face == CubeFace.Back) {
                 // mapping: local x is global -z, local y is global -y
                 faceParent.scale.set(1.0, zoomRelativeToWorld.y, zoomRelativeToWorld.x);
-                faceParent.position.setY(zoomRelativeToWorld.y * (currentCenterPoint.y - globalCenterPoint.y) / worldSize.y);
-                faceParent.position.setZ(zoomRelativeToWorld.x * (currentCenterPoint.x - globalCenterPoint.x) / worldSize.x);
+                faceParent.position.setY(cubeScale.y * zoomRelativeToWorld.y * (currentCenterPoint.y - globalCenterPoint.y) / worldSize.y);
+                faceParent.position.setZ(cubeScale.z * zoomRelativeToWorld.x * (currentCenterPoint.x - globalCenterPoint.x) / worldSize.x);
                 
                  for (let mesh of faceParent.children) {
                      if (mesh.userData.dimension == Dimension.X) {
@@ -780,8 +790,8 @@ class CubeRendering {
             } else if (face == CubeFace.Top || face == CubeFace.Bottom) {
                 // local x is global -z, local y is global +x!
                 faceParent.scale.set(zoomRelativeToWorld.y, 1.0, zoomRelativeToWorld.x);
-                faceParent.position.setX(-zoomRelativeToWorld.y * (currentCenterPoint.y - globalCenterPoint.y) / worldSize.y);
-                faceParent.position.setZ(zoomRelativeToWorld.x * (currentCenterPoint.x - globalCenterPoint.x) / worldSize.x);
+                faceParent.position.setX(cubeScale.x * -zoomRelativeToWorld.y * (currentCenterPoint.y - globalCenterPoint.y) / worldSize.y);
+                faceParent.position.setZ(cubeScale.z * zoomRelativeToWorld.x * (currentCenterPoint.x - globalCenterPoint.x) / worldSize.x);
                 
                 for (let mesh of faceParent.children) {
                     if (mesh.userData.dimension == Dimension.X) {
@@ -793,8 +803,8 @@ class CubeRendering {
             } else {
                 // local x is global -y, local y is global +x!
                 faceParent.scale.set(zoomRelativeToWorld.y, zoomRelativeToWorld.x, 1.0);
-                faceParent.position.setX(-zoomRelativeToWorld.y * (currentCenterPoint.y - globalCenterPoint.y) / worldSize.y);
-                faceParent.position.setY(zoomRelativeToWorld.x * (currentCenterPoint.x - globalCenterPoint.x) / worldSize.x);
+                faceParent.position.setX(cubeScale.x * -zoomRelativeToWorld.y * (currentCenterPoint.y - globalCenterPoint.y) / worldSize.y);
+                faceParent.position.setY(cubeScale.y * zoomRelativeToWorld.x * (currentCenterPoint.x - globalCenterPoint.x) / worldSize.x);
                 
                 for (let mesh of faceParent.children) {
                     if (mesh.userData.dimension == Dimension.X) {
@@ -831,9 +841,9 @@ class CubeRendering {
     }
 
     private createRegionBordersSideLinePositions(face: CubeFace, lineAmount: number) {
-        const y = face == CubeFace.Top ? this.regionBordersDistanceFromCubeCenter : face == CubeFace.Bottom ? -this.regionBordersDistanceFromCubeCenter : 0;
-        const z = face == CubeFace.Left ? this.regionBordersDistanceFromCubeCenter : face == CubeFace.Right ? -this.regionBordersDistanceFromCubeCenter : 0;
-        const positions: number[] = range(0, lineAmount * 6 - 1).map((i) => i % 3 == 0 ? (((Math.floor(i / 3) % 2 == 0) ? -this.regionBordersDistanceFromCubeCenter : this.regionBordersDistanceFromCubeCenter)) : (i % 3 == 1 ? y : z));
+        const y = face == CubeFace.Top ? this.regionBordersDistanceFromCubeCenterInRenderWorld.y : face == CubeFace.Bottom ? -this.regionBordersDistanceFromCubeCenterInRenderWorld.y : 0;
+        const z = face == CubeFace.Left ? this.regionBordersDistanceFromCubeCenterInRenderWorld.z : face == CubeFace.Right ? -this.regionBordersDistanceFromCubeCenterInRenderWorld.z : 0;
+        const positions: number[] = range(0, lineAmount * 6 - 1).map((i) => i % 3 == 0 ? (((Math.floor(i / 3) % 2 == 0) ? -this.regionBordersDistanceFromCubeCenterInRenderWorld.x : this.regionBordersDistanceFromCubeCenterInRenderWorld.x)) : (i % 3 == 1 ? y : z));
         return positions;
     }
 
@@ -851,10 +861,10 @@ class CubeRendering {
     };
     
     private createRegionBorders() {
-        this.regionBordersSidePlanes.set(CubeFace.Top, new Plane(new Vector3(0, 1, 0), this.regionBordersDistanceFromCubeCenter));
-        this.regionBordersSidePlanes.set(CubeFace.Bottom, new Plane(new Vector3(0, -1, 0), this.regionBordersDistanceFromCubeCenter));
-        this.regionBordersSidePlanes.set(CubeFace.Left, new Plane(new Vector3(0, 0, 1), this.regionBordersDistanceFromCubeCenter));
-        this.regionBordersSidePlanes.set(CubeFace.Right, new Plane(new Vector3(0, 0, -1), this.regionBordersDistanceFromCubeCenter));
+        this.regionBordersSidePlanes.set(CubeFace.Top, new Plane(new Vector3(0, 1, 0), this.regionBordersDistanceFromCubeCenterInRenderWorld.y));
+        this.regionBordersSidePlanes.set(CubeFace.Bottom, new Plane(new Vector3(0, -1, 0), this.regionBordersDistanceFromCubeCenterInRenderWorld.y));
+        this.regionBordersSidePlanes.set(CubeFace.Left, new Plane(new Vector3(0, 0, 1), this.regionBordersDistanceFromCubeCenterInRenderWorld.z));
+        this.regionBordersSidePlanes.set(CubeFace.Right, new Plane(new Vector3(0, 0, -1), this.regionBordersDistanceFromCubeCenterInRenderWorld.z));
 
         this.regionBordersSideParent = new Object3D();
         this.scene.add(this.regionBordersSideParent);
@@ -948,7 +958,7 @@ class CubeRendering {
     }
 
     private async clearRegionBorders() {
-        this.regionBordersFrontParent.children.forEach((child) => {
+        this.regionBordersFrontParent.children.forEach((child: Object3D) => {
             if (child instanceof LineSegments) {
                 child.geometry.dispose();
             }
@@ -1018,10 +1028,10 @@ class CubeRendering {
         const frontLinePositions = frontLineSegments.geometry.attributes.position.array;
         const centerX = (xLeft + xRight) / 2;
         const centerY = (yTop + yBottom) / 2;
-        const xLeftAdjusted =   skipCubeOffset ? xLeft   : centerX + (xLeft - centerX)   * this.regionBordersDistanceFromCubeCenter / 0.5;
-        const xRightAdjusted =  skipCubeOffset ? xRight  : centerX + (xRight - centerX)  * this.regionBordersDistanceFromCubeCenter / 0.5;
-        const yTopAdjusted =    skipCubeOffset ? yTop    : centerY + (yTop - centerY)    * this.regionBordersDistanceFromCubeCenter / 0.5;
-        const yBottomAdjusted = skipCubeOffset ? yBottom : centerY + (yBottom - centerY) * this.regionBordersDistanceFromCubeCenter / 0.5;
+        const xLeftAdjusted =   skipCubeOffset ? xLeft   : centerX + (xLeft - centerX)   * (1 + this.regionBordersDistanceFromCubeCenterOffset);
+        const xRightAdjusted =  skipCubeOffset ? xRight  : centerX + (xRight - centerX)  * (1 + this.regionBordersDistanceFromCubeCenterOffset);
+        const yTopAdjusted =    skipCubeOffset ? yTop    : centerY + (yTop - centerY)    * (1 + this.regionBordersDistanceFromCubeCenterOffset);
+        const yBottomAdjusted = skipCubeOffset ? yBottom : centerY + (yBottom - centerY) * (1 + this.regionBordersDistanceFromCubeCenterOffset);
 
         const minZ = -xRightAdjusted;
         const maxZ = -xLeftAdjusted;
@@ -1181,14 +1191,17 @@ class CubeRendering {
         const datasetSize = new Vector2(xTotalRange.range(), yTotalRange.range());
 
         const zoomRelativeToDataset = new Vector2().copy(datasetSize).divide(selectionSize);
-        
+        const cubeScale = this.getCubeScaleInRenderWorld();
+        zoomRelativeToDataset.x *= cubeScale.z;
+        zoomRelativeToDataset.y *= cubeScale.y;
+
         const normalizationMatrix = new Matrix4() // normalizes GeoJSON that fits into the dataset bounds to [-0.5, 0.5] x [-0.5, 0.5] 
             .multiply(new Matrix4().makeScale(1, 1 / yTotalRange.range(), 1 / xTotalRange.range()))
             .multiply(new Matrix4().makeTranslation(0, -datasetCenterPoint.y, -datasetCenterPoint.x))
 
         const finalMatrix = new Matrix4()
             .makeTranslation(
-                this.regionBordersDistanceFromCubeCenter * (this.faceVisibility[CubeFace.Back] ? -1 : 1), // move to front or back depending on face visibility 
+                this.regionBordersDistanceFromCubeCenterInRenderWorld.x * (this.faceVisibility[CubeFace.Back] ? -1 : 1), // move to front or back depending on face visibility 
                 -zoomRelativeToDataset.y * (selectionCenterPoint.y - datasetCenterPoint.y) / datasetSize.y, // positive data Y = positive global Y
                 zoomRelativeToDataset.x * (selectionCenterPoint.x + datasetCenterPoint.x) / datasetSize.x  // positive data X = negative global Z
             )
@@ -1302,7 +1315,7 @@ class CubeRendering {
         }
     }
 
-    raycastNdc(ndc: THREE.Vector2) {
+    raycastNdc(ndc: Vector2) {
         this.rayCaster.setFromCamera(ndc, this.mainCamera);
         return this.rayCaster.intersectObjects([this.cube]);
     }
@@ -1824,7 +1837,7 @@ class CubeRendering {
     }
 
     private getVisuallyDominantFace() {
-        const b = this.mainCamera.position.toArray().map(a => Math.abs(a));
+        const b = this.mainCamera.position.toArray().map((a: number) => Math.abs(a));
         const max = Math.max(...b);
         if (max == Math.abs(this.mainCamera.position.x)) {
             return Math.sign(this.mainCamera.position.x) > 0 ? CubeFace.Front : CubeFace.Back;

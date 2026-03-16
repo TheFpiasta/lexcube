@@ -41,6 +41,7 @@ class CubeClientContext {
     noUiMode: boolean = false;
     scriptedMultiViewMode: boolean = false;
     textureFilteringEnabled: boolean = false;
+    cubeScale: number[] = [1, 1, 1];
 
     screenOrientation: DeviceOrientation = (screen.orientation ? (screen.orientation.type.indexOf("landscape") > -1 ? DeviceOrientation.Landscape : DeviceOrientation.Portrait) : (window.innerHeight > window.innerWidth ? DeviceOrientation.Portrait : DeviceOrientation.Landscape));
     screenAspectRatio: number = window.screen.width / window.screen.height;
@@ -51,9 +52,10 @@ class CubeClientContext {
     touchDevice = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0);
     widgetPostStartup: () => void = () => {};
 
-    constructor(widgetMode: boolean = false, htmlParent: HTMLElement = document.body, isometricMode: boolean = false) {
+    constructor(widgetMode: boolean = false, htmlParent: HTMLElement = document.body, isometricMode: boolean = false, cubeScale: number[] | undefined = undefined) {
         this.widgetMode = widgetMode;
         this.isometricMode = isometricMode; 
+        this.cubeScale = cubeScale || this.cubeScale;
 
         if (!widgetMode) {
             this.isometricMode = this.isometricMode || document.URL.indexOf("isometric") > 0;
