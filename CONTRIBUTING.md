@@ -8,9 +8,10 @@ Create a dev environment:
 
 ```bash
 # Using VENV only (if Node and Python are already installed)
-npm i
+npm ci
 python -m venv .venv
 .\\.venv\\Scripts\\activate # or your OS-equivalent
+# . .venv/bin/activate # for linux
 pip install jupyterlab
 pip install -r ./lexcube/lexcube_server/requirements-core.txt
 
@@ -21,8 +22,13 @@ pip install -r ./lexcube/lexcube_server/requirements-core.txt
 conda activate lexcube-dev
 ```
 
-Install the python. This will also build the TS package.
+Build the standalone client and install the python. This will also build the TS package.
+
 ```bash
+cd src/lexcube-client
+npm ci
+npm run build
+cd /home/fpiasta/WebstormProjects/lexcube
 pip install -e ".[test, examples]"
 ```
 
