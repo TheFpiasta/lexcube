@@ -16,6 +16,8 @@
             "hidden": false,
             "flippedY": false,
             "useOfflineMetadata": false,
+            "enableCaching": true,
+            "maxCacheGb": 10,
             "notes": {"source": {"url": "n/a"}}
         }
     ]
