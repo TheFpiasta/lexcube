@@ -193,6 +193,9 @@ class Networking {
         if (this.context.widgetMode) {
             this.requestTileDataFromWidget!({"request_type": "request_tile_data_multiple", "request_data": data});
         } else {
+            for (const requestData of data) {
+                this.tileWebsocket.emit('request_tile_data', requestData);
+            }
         }
     }
 
