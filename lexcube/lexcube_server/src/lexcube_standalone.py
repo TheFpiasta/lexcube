@@ -78,6 +78,11 @@ async def handle_request_tile_data(sid, data):
     await tile_server.handle_tile_request_standalone(sio, sid, data)
 
 
+@sio.on("cancel_tile_requests")
+async def handle_cancel_tile_requests(sid, data):
+    await tile_server.handle_cancel_tile_requests(data)
+
+
 # Serve Natural Earth GeoJSON files at the root path (e.g. /ne_110m_admin_0_countries.geojson).
 # This mount must come AFTER the API routes so that /api/* routes are matched first.
 app.mount("/", StaticFiles(directory=str(GEOJSON_DIR)), name="geojson")

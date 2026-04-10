@@ -20,7 +20,7 @@ import { io, Socket } from 'socket.io-client';
 import { Vector2 } from 'three';
 import { CubeClientContext } from './client';
 import { Tile } from './tiledata';
-import { PACKAGE_VERSION } from './constants';
+import { CubeFace, Dimension, PACKAGE_VERSION } from './constants';
 
 class Networking {
     private receivedBytes = 0;
@@ -32,6 +32,7 @@ class Networking {
     private connectionLostAlerted: boolean = false;
 
     private tileCache: Map<string, any>;
+    private pendingBlocks: { datasetId: string; parameter: string; indexDimension: string; indexValue: number }[] = [];
 
     constructor(context: CubeClientContext, apiServerUrl: string) {
         this.context = context;
@@ -144,6 +145,20 @@ class Networking {
             this.context.tileData.receiveTile(t, data);
             read += size;
         }
+        const meta = header.metadata;
+        this.pendingBlocks = this.pendingBlocks.filter(
+            b => !(b.datasetId === meta.datasetId && b.parameter === meta.parameter &&
+                   b.indexDimension === meta.indexDimension && b.indexValue === meta.indexValue)
+        );
+    }
+
+    cancelBlocksForFace(face: CubeFace) {
+        if (this.context.widgetMode) return;
+        const dim = face <= 1 ? 'by_z' : (face <= 3 ? 'by_y' : 'by_x');
+        const toCancel = this.pendingBlocks.filter(b => b.indexDimension === dim);
+        if (toCancel.length === 0) return;
+        this.tileWebsocket.emit('cancel_tile_requests', { blocks: toCancel });
+        this.pendingBlocks = this.pendingBlocks.filter(b => b.indexDimension !== dim);
     }
 
     async downloadTile(tile: Tile) {
@@ -182,6 +197,12 @@ class Networking {
                 group.forEach((t) => xys.push([t.x, t.y]));
                 xys.sort((a, b) => (a[1] - b[1]) || (a[0] - b[0]))
                 totalData.push(group[0].getRequestDataWithMultipleXYs(xys))
+                this.pendingBlocks.push({
+                    datasetId: group[0].cubeId,
+                    parameter: group[0].parameter,
+                    indexDimension: `by_${Dimension[group[0].indexDimension()].toLowerCase()}`,
+                    indexValue: group[0].indexValue,
+                });
             }
             this.requestTileData(totalData);
         }

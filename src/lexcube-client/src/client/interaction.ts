@@ -4003,6 +4003,7 @@ class CubeInteraction {
         for (let face = 0; face < 6; face++) {
             const newIndexValue = this.cubeSelection.getIndexValueForFace(face);
             if (this.lastIndexValue[face] != newIndexValue) {
+                this.context.networking.cancelBlocksForFace(face);
                 this.context.tileData.resetTileDownloadMapsForFace(face);
                 this.lastIndexValue[face] = newIndexValue;
             }
