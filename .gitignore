@@ -171,3 +171,6 @@ lexcube/labextension
 /config.json
 /.tiles/
 /_data/
+
+# Jupyter notebooks created in project root
+/*.ipynb
