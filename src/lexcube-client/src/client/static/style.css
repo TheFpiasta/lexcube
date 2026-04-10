@@ -1,0 +1,345 @@
+.lexcube-body {
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    overflow: hidden;
+    margin: 0px;
+    background-color: black;
+}
+
+.lexcube-body .animation-dropdown {
+    -webkit-animation: fadeIn 0.5s;
+    animation: fadeIn 0.5s;
+}
+
+.lexcube-body .animation-dropdown-content {
+    display: none;
+    position: absolute;
+    right: 0%;
+    min-width: 220px;
+    z-index: 1;
+}
+
+.lexcube-body .animation-dropdown-content .noUi-tooltip {
+    font-size: small;
+    padding: 3px;
+}
+
+.lexcube-body .animation-dropdown-content .slider {
+    padding: 0 16px;
+    margin: 40px 30px 15px 30px;
+}
+
+.lexcube-body .parameter-select {
+    max-width: 350px;
+}
+
+.lexcube-body .cube-select {
+    max-width: 350px;
+}
+
+.lexcube-body .selection-section {
+    min-width: 350px;
+}
+
+@media screen and (max-width : 50rem) and (orientation : portrait) {
+    .lexcube-body .parameter-select {
+        max-width: 240px;
+    }
+
+    .lexcube-body .cube-select {
+        max-width: 240px;
+    }
+
+    .lexcube-body .selection-section {
+        min-width: 280px;
+    }
+}
+
+.lexcube-body .ui-normal {
+    padding: 0.5em 0.7em 0.5em 0.7em;
+    background-color: rgba(5, 9, 28, 0.97);
+    border-radius: 5px;
+    border-style: solid;
+    border-color: white;
+    border-width: 2px;
+    color: #eeeeee;
+}
+
+.lexcube-body .axis-label-parent {
+    position: absolute;
+    -moz-transition: all 0.05s ease-out;
+    transition: all 0.05s ease-out;
+    font-size: small;
+}
+
+.lexcube-body .tutorial-video {
+    border: 2px dashed #fff;
+    margin: 12px;
+}
+
+.lexcube-body .axis-label {
+    top: 50%;
+    left: 50%;
+}
+
+.lexcube-body .hover-info-ui {
+    align-self: flex-start;
+    margin-bottom: 10px;
+    display: none;
+}
+
+.lexcube-body .color-scale {
+    align-self: self-start;
+    cursor: pointer;
+}
+
+.lexcube-body .color-scale-unit-label {
+    color: white;
+    font-weight: bold;
+}
+
+.lexcube-body .color-scale-labels {
+    color: white;
+    width: 100%;
+    height: 20px;
+    margin-bottom: 5px;
+    justify-content: space-between;
+    display: flex;
+}
+
+.lexcube-body .options-ui {
+    position: absolute;
+    left: 1.5%;
+    top: 1.5%;
+    overflow-y: auto;
+    overflow-x: hidden;
+    max-height: 95%;
+}
+
+.lexcube-body .animation-settings-ui {
+    overflow-x: hidden;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+}
+
+.lexcube-body .toolbar-ui {
+    position: absolute;
+    right: 1.5%;
+    top: 1.5%;
+    display: flex;
+    flex-wrap: wrap;
+    max-width: 55%;
+    justify-content: end;
+    flex-direction: row-reverse;
+}
+
+.lexcube-body .toolbar-ui-button {
+    width: 45px;
+    height: 45px;
+    background-size: cover;
+    margin-left: 7px;
+    cursor: pointer;
+    margin-bottom: 10px;
+    margin-right: 7px;
+}
+
+.lexcube-body .filter-black-to-white {
+    filter: invert(97%) sepia(0%) saturate(0%) hue-rotate(24deg) brightness(110%) contrast(103%);
+}
+
+.lexcube-body .filter-black-to-grey {
+    filter: invert(99%) sepia(87%) saturate(26%) hue-rotate(178deg) brightness(119%) contrast(87%);
+}
+
+.lexcube-body .bottom-left-ui {
+    max-height: 95%;
+    position: absolute;
+    left: 1.5%;
+    bottom: 1.5%;
+}
+
+.lexcube-body .colormap-options {
+    margin-bottom: 10px;
+    align-self: self-start;
+    height: 100%;
+}
+
+.lexcube-body .print-template-result {
+    max-width: 60%;
+    max-height: 70%;
+}
+
+@media screen and (max-height : 50rem) and (orientation : landscape) {
+    .lexcube-body .print-template-result {
+        max-width: 25%;
+        max-height: 40%;
+    }
+}
+
+@media screen and (max-height : 25rem) and (orientation : landscape) {
+    .lexcube-body .print-template-result {
+        display: none;
+    }
+}
+
+.lexcube-body .top-left-ui {
+    position: absolute;
+    left: 2.5%;
+    top: 2.5%;
+}
+
+.lexcube-body .dataset-info-corner {
+    position: absolute;
+    right: 0px;
+    bottom: 0px;
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding: 0.2em 0.4em 0.2em 0.4em;
+    display: inline-block;
+    color: grey;
+    text-align: right;
+    width: 45%;
+}
+
+.lexcube-body .dataset-info-window {
+    padding: 0.7em 0.9em 0.7em 0.9em;
+    border-radius: 8px;
+    max-width: min(1024px, 75%);
+    max-height: 90%;
+}
+
+.lexcube-body .flex-col-center {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+}
+
+.lexcube-body .flex-col-center-end {
+    display: flex;
+    flex-direction: column;
+    justify-content: end;
+    align-items: center;
+}
+
+.lexcube-body .dataset-info-wrapper {
+    display: none;
+    background-color: rgba(0, 0, 0, 0.404);
+    z-index: 3;
+}
+
+.lexcube-body .btn-group button:hover {
+    border: 3px solid blueviolet;
+}
+
+.lexcube-body .btn-group button.selected {
+    border: 3px solid white;
+    text-decoration: underline;
+}
+
+.lexcube-body .btn-group button {
+    background-size: 100% auto;
+    border: 2px solid black;
+    cursor: pointer;
+    width: 210px;
+    display: block;
+    max-height: 35px;
+    min-height: 30px;
+    margin-top: 3px;
+    text-shadow: -1px -1px 0 black, 1px -1px 0 black, -1px 1px 0 black, 1px 1px 0 black;
+    color: white;
+    font-weight: bold;
+    background-repeat: repeat-y;
+}
+
+.lexcube-body h3 {
+    margin: 0px;
+}
+
+.lexcube-body .noselect {
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    -khtml-user-select: none;
+    -moz-user-select: none;
+    -ms-user-select: none;
+    user-select: none;
+}
+
+.lexcube-body .visible {
+    visibility: visible;
+    opacity: 1;
+}
+
+.lexcube-body .hidden {
+    visibility: hidden;
+    opacity: 0;
+    transition: visibility 0s 0.5s, opacity 0.5s ease-in;
+}
+
+.lexcube-body .slider {
+    padding: 0 16px;
+    margin: 50px 30px 15px 30px;
+}
+
+.lexcube-body .nopointer {
+    pointer-events: none;
+}
+
+.lexcube-body .close-button {
+    background-size: contain;
+    top: -14px;
+    position: absolute;
+    right: -15px;
+    cursor: pointer;
+    width: 32px;
+    height: 32px;
+    background-image: url("data:image/svg+xml;base64,PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0iVVRGLTgiIHN0YW5kYWxvbmU9Im5vIj8+CjxzdmcKICAgdmVyc2lvbj0iMS4xIgogICBpZD0iTGF5ZXJfMSIKICAgeD0iMHB4IgogICB5PSIwcHgiCiAgIHdpZHRoPSIxMjguODgxIgogICBoZWlnaHQ9IjEyOC44NzkiCiAgIHZpZXdCb3g9IjAgMCAxMjguODgxIDEyOC44NzkiCiAgIGVuYWJsZS1iYWNrZ3JvdW5kPSJuZXcgMCAwIDEyMi44ODEgMTIyLjg4IgogICB4bWw6c3BhY2U9InByZXNlcnZlIgogICBzb2RpcG9kaTpkb2NuYW1lPSJjbG9zZS1yb3VuZC1pY29uLnN2ZyIKICAgaW5rc2NhcGU6dmVyc2lvbj0iMS4yLjIgKDczMmEwMWRhNjMsIDIwMjItMTItMDkpIgogICB4bWxuczppbmtzY2FwZT0iaHR0cDovL3d3dy5pbmtzY2FwZS5vcmcvbmFtZXNwYWNlcy9pbmtzY2FwZSIKICAgeG1sbnM6c29kaXBvZGk9Imh0dHA6Ly9zb2RpcG9kaS5zb3VyY2Vmb3JnZS5uZXQvRFREL3NvZGlwb2RpLTAuZHRkIgogICB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciCiAgIHhtbG5zOnN2Zz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciPjxkZWZzCiAgICAgaWQ9ImRlZnM1MTY4IiAvPjxzb2RpcG9kaTpuYW1lZHZpZXcKICAgICBpZD0ibmFtZWR2aWV3NTE2NiIKICAgICBwYWdlY29sb3I9IiNmZmZmZmYiCiAgICAgYm9yZGVyY29sb3I9IiMwMDAwMDAiCiAgICAgYm9yZGVyb3BhY2l0eT0iMC4yNSIKICAgICBpbmtzY2FwZTpzaG93cGFnZXNoYWRvdz0iMiIKICAgICBpbmtzY2FwZTpwYWdlb3BhY2l0eT0iMC4wIgogICAgIGlua3NjYXBlOnBhZ2VjaGVja2VyYm9hcmQ9IjAiCiAgICAgaW5rc2NhcGU6ZGVza2NvbG9yPSIjZDFkMWQxIgogICAgIHNob3dncmlkPSJmYWxzZSIKICAgICBpbmtzY2FwZTp6b29tPSIyLjcxNjEwMDQiCiAgICAgaW5rc2NhcGU6Y3g9IjY5Ljk1MzIzMiIKICAgICBpbmtzY2FwZTpjeT0iMTAxLjk4NDQ1IgogICAgIGlua3NjYXBlOndpbmRvdy13aWR0aD0iMzg0MCIKICAgICBpbmtzY2FwZTp3aW5kb3ctaGVpZ2h0PSIyMDM2IgogICAgIGlua3NjYXBlOndpbmRvdy14PSIzODI4IgogICAgIGlua3NjYXBlOndpbmRvdy15PSItMTIiCiAgICAgaW5rc2NhcGU6d2luZG93LW1heGltaXplZD0iMSIKICAgICBpbmtzY2FwZTpjdXJyZW50LWxheWVyPSJMYXllcl8xIiAvPjxnCiAgICAgaWQ9Imc1MTYzIgogICAgIHN0eWxlPSJmaWxsOiNmZmZmZmY7ZmlsbC1vcGFjaXR5OjE7c3Ryb2tlOiMwMDAwMDA7c3Ryb2tlLXdpZHRoOjY7c3Ryb2tlLWRhc2hhcnJheTpub25lO3N0cm9rZS1vcGFjaXR5OjEiCiAgICAgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoMywzKSI+PHBhdGgKICAgICAgIGZpbGwtcnVsZT0iZXZlbm9kZCIKICAgICAgIGNsaXAtcnVsZT0iZXZlbm9kZCIKICAgICAgIGQ9Im0gNjEuNDQsMCBjIDMzLjkzMywwIDYxLjQ0MSwyNy41MDcgNjEuNDQxLDYxLjQzOSAwLDMzLjkzMyAtMjcuNTA4LDYxLjQ0IC02MS40NDEsNjEuNDQgQyAyNy41MDgsMTIyLjg4IDAsOTUuMzcyIDAsNjEuNDM5IDAsMjcuNTA3IDI3LjUwOCwwIDYxLjQ0LDAgWiBtIDIwLjI3OSwzNi4yMjYgYyAxLjM2MywtMS4zNjMgMy41NzIsLTEuMzYzIDQuOTM2LDAgMS4zNjMsMS4zNjMgMS4zNjMsMy41NzMgMCw0LjkzNiBsIC0yMC4yOCwyMC4yNzcgMjAuMjc5LDIwLjI3OCBjIDEuMzYzLDEuMzYzIDEuMzYzLDMuNTczIDAsNC45MzcgLTEuMzYzLDEuMzYyIC0zLjU3MiwxLjM2MiAtNC45MzYsMCBMIDYxLjQ0LDY2LjM3NiA0MS4xNjIsODYuNjU0IGMgLTEuMzYyLDEuMzYyIC0zLjU3MywxLjM2MiAtNC45MzYsMCAtMS4zNjMsLTEuMzYzIC0xLjM2MywtMy41NzMgMCwtNC45MzcgTCA1Ni41MDQsNjEuNDM5IDM2LjIyNiw0MS4xNjIgYyAtMS4zNjMsLTEuMzYzIC0xLjM2MywtMy41NzMgMCwtNC45MzYgMS4zNjMsLTEuMzYzIDMuNTczLC0xLjM2MyA0LjkzNiwwIEwgNjEuNDQsNTYuNTA0IFoiCiAgICAgICBpZD0icGF0aDUxNjEiCiAgICAgICBzdHlsZT0iZmlsbDojZmZmZmZmO2ZpbGwtb3BhY2l0eToxO3N0cm9rZTojMDAwMDAwO3N0cm9rZS13aWR0aDo2O3N0cm9rZS1kYXNoYXJyYXk6bm9uZTtzdHJva2Utb3BhY2l0eToxIiAvPjwvZz48L3N2Zz4K")
+}
+
+.lexcube-body .fullscreen-wrapper {
+    position: absolute;
+    width: 100%;
+    height: 100%;
+}
+
+.lexcube-body button {
+    background: white;
+    background-color: rgb(183, 169, 196);
+    color: black;
+    border: 2px solid black;
+    border-radius: 2px;
+    padding: 0.2em 0.3em 0.2em 0.3em;
+    cursor: pointer;
+    margin: 0.2em 0 0.2em 0;
+    font-size: 1em;
+    font-weight: bold;
+}
+
+.lexcube-body .status-message {
+    display: inline-block;
+    background-color: rgba(61, 61, 61, 0.5);
+    padding: 0.5em 0.7em 0.5em 0.7em;
+    border-radius: 1px;
+    color: white;
+    z-index: 50;
+}
+
+.lexcube-body #logo-left {
+    animation: loading-logo-left 3s cubic-bezier(0.075, 0.82, 0.165, 1) infinite;
+}
+
+.lexcube-body #logo-right {
+    animation: loading-logo-right 3s cubic-bezier(0.075, 0.82, 0.165, 1) infinite;
+}
+
+.lexcube-body #logo-top {
+    animation: loading-logo-top 3s cubic-bezier(0.075, 0.82, 0.165, 1) infinite;
+}
+
+.lexcube-body a {
+    color: lightblue;
+}
+
+.lexcube-body a:visited {
+    color: lightgrey;
+}

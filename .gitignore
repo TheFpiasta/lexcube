@@ -166,3 +166,11 @@ lexcube/nbextension/*.index.*
 lexcube/labextension
 .venv
 .yarn
+
+# Standalone server config and data (user-specific, not for version control)
+/config.json
+/.tiles/
+/_data/
+
+# Jupyter notebooks created in project root
+/*.ipynb

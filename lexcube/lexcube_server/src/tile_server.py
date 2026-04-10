@@ -16,6 +16,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import threading
 import enum
 import gc
 import json
@@ -144,6 +146,8 @@ class TileCompressor:
         self.tile_data_compressor_default = ZfpCompressor()
         self.tile_data_compressor_lossless = numcodecs.blosc.Blosc()
         self.nan_mask_compressor = numcodecs.lz4.LZ4(5)
+        self.default_compression_tolerance = -1
+        self.anomaly_compression_tolerance = -1
 
     def set_tolerance(self, default_compression_tolerance: float, anomaly_compression_tolerance: float):
         self.default_compression_tolerance = default_compression_tolerance
@@ -261,9 +265,9 @@ def patch_dataset(ds: Union[xr.DataArray, xr.Dataset, np.ndarray]):
 
 def open_dataset(config: ServerConfig, path: str):
     aws_s3_hosted = path.startswith("s3://")
-    http_hosted = path.startswith("http://")
+    http_hosted = path.startswith("http://") or path.startswith("https://")
     remote_hosted = aws_s3_hosted or http_hosted
-    file_extension = path.split(".")[-1]
+    file_extension = path.rstrip("/").split(".")[-1]
     protocol = path.split("://")[0]
     print(f"        > Opening {f'{protocol}-hosted' if remote_hosted else 'locally saved'} dataset ({path})")
     protocol_map = {
@@ -287,10 +291,14 @@ class DatasetConfig:
         self.only_parameters: list[str] = list(dataset_config.get("onlyParameters") or [])
         self.pre_generation_sparsity = int(dataset_config.get("preGenerationSparsity") or DEFAULT_PRE_GENERATION_SPARSITY) 
         self.calculate_anomalies = bool(dataset_config.get("calculateYearlyAnomalies") or False)
-        self.force_tile_generation = bool(dataset_config.get("forceTileGeneration") or False) 
-        self.max_lod = int(dataset_config.get("overrideMaxLod") or -1) 
-        self.use_offline_metadata = bool(dataset_config.get("useOfflineMetadata") or False) 
-        self.min_max_values_approximate_only = bool(dataset_config.get("approximateMinMaxValues") or True) 
+        self.force_tile_generation = bool(dataset_config.get("forceTileGeneration") or False)
+        self.max_lod = int(dataset_config.get("overrideMaxLod") or -1)
+        self.use_offline_metadata = bool(dataset_config.get("useOfflineMetadata") or False)
+        self.min_max_values_approximate_only = bool(dataset_config.get("approximateMinMaxValues") or True)
+        self.enable_caching = bool(dataset_config.get("enableCaching", False))
+        self.max_cache_gb = float(dataset_config.get("maxCacheGb", 0))
+        if self.enable_caching and self.max_cache_gb <= 0:
+            raise ValueError(f"Dataset '{self.id}': enableCaching is true but maxCacheGb is not set or is 0. Set maxCacheGb to a positive value.")
 
 LONGITUDE_DIMENSION_NAMES = ["longitude","lon"]
 LATITUDE_DIMENSION_NAMES = ["latitude","lat"]
@@ -450,9 +458,11 @@ class ParameterMetadataParser:
         local_1quantiles = []
         local_99quantiles = []
         
-        print(f"Find min, max and quantile values {'[approximate only]' if approximate_only else ''} - ", end="", flush=True)
+        total_steps = len(range(first_time_slice, last_time_slice, step))
+        print(f"Find min, max and quantile values {'[approximate only]' if approximate_only else ''} ({total_steps} samples) - ", end="", flush=True)
         for t in range(first_time_slice, last_time_slice, step):
             observations += 1
+            print(f"{observations}/{total_steps}", end="\r", flush=True)
             values = patch_data(parameter_data[t].values, dataset_id, parameter)
             mask = np.abs(values) != np.inf
             local_min = np.nanmin(values[mask], initial=minimum_value)
@@ -556,6 +566,8 @@ class Dataset:
         self.data: xr.Dataset = None
         self.calculate_anomalies: bool = self.dataset_config.calculate_anomalies
         self.force_tile_generation: bool = self.dataset_config.force_tile_generation
+        self.enable_caching: bool = self.dataset_config.enable_caching
+        self.max_cache_gb: float = self.dataset_config.max_cache_gb
         self.all_valid_parameters: list[str] = []
         self.real_parameters: list[str] = []
         self.virtual_parameters: list[str] = []
@@ -717,8 +729,9 @@ class ServerConfig:
                 self.datasets[dataset_config["id"]] = Dataset(self, dataset_config, self.base_dir, self.tile_size)
 
 class TileDiskStorage:
-    def __init__(self, directory: str, datasets: dict[str, Dataset]) -> None:
+    def __init__(self, directory: str, tile_size: int, datasets: dict[str, Dataset]) -> None:
         self.directory = directory
+        self.tile_size = tile_size
         self.datasets = datasets
 
     def try_migrate_dimension_folders(self, dataset: Dataset):
@@ -734,18 +747,18 @@ class TileDiskStorage:
                 new_name = dataset.get_dimension_name(Dimension(n))
                 if old_name == new_name or not old_name in existing_names:
                     continue
-                if first: 
+                if first:
                     print(f"{dataset.id} -- Migrating old lon/lat/time dimension folders to new names (matching their actual dimension names)")
                     first = False
                 source = os.path.join(self.directory, dataset.id, param, old_name)
                 destination = os.path.join(self.directory, dataset.id, param, new_name)
                 shutil.move(source, destination)
-        
+
     def get_block_path(self, dataset: Dataset, parameter: str, index_dimension: Dimension, indexValue: int):
-        return os.path.join(self.directory, dataset.id, parameter, dataset.get_dimension_name(index_dimension), f"{indexValue}")
+        return os.path.join(self.directory, dataset.id, parameter, str(self.tile_size), dataset.get_dimension_name(index_dimension), f"{indexValue}")
 
     def get_tile_path(self, tile: Tile):
-        return os.path.join(self.directory, tile.dataset_id, tile.parameter, self.datasets[tile.dataset_id].get_dimension_name(tile.index_dimension), f"{tile.index_value}.{tile.lod}.{tile.x}.{tile.y}")
+        return os.path.join(self.directory, tile.dataset_id, tile.parameter, str(self.tile_size), self.datasets[tile.dataset_id].get_dimension_name(tile.index_dimension), f"{tile.index_value}.{tile.lod}.{tile.x}.{tile.y}")
     
 class TileMemoryCache:
     def __init__(self) -> None:
@@ -1028,7 +1041,20 @@ class TileServer:
         self.next_request_group_id = 0
         self.request_progress = {}
         self.request_progress_touched_chunks = {}
-    
+        self._block_generation_locks: dict[str, asyncio.Lock] = {}
+        self._generation_cancel_flags: dict[str, threading.Event] = {}
+
+
+    def _get_dataset_cache_size_bytes(self, dataset: Dataset) -> int:
+        dataset_dir = os.path.join(self.tile_disk_storage.directory, dataset.id)
+        total = 0
+        for dirpath, _, filenames in os.walk(dataset_dir):
+            for f in filenames:
+                try:
+                    total += os.path.getsize(os.path.join(dirpath, f))
+                except OSError:
+                    pass
+        return total
 
     def update_progress(self, request_group_id: int, request_id: int, done: int, total: int = -1, touched_chunks: set = None):
         if not self.request_progress.get(request_group_id):
@@ -1074,7 +1100,7 @@ class TileServer:
             c.generate_block_indices(self)
         print("* Finished opening datasets")
 
-        self.tile_disk_storage = TileDiskStorage(os.path.join(self.config.tile_cache_directory, f"tile_version_{TILE_VERSION}", str(self.TILE_SIZE)), self.datasets)
+        self.tile_disk_storage = TileDiskStorage(os.path.join(self.config.tile_cache_directory, f"tile_version_{TILE_VERSION}"), self.TILE_SIZE, self.datasets)
         os.makedirs(self.config.tile_cache_directory, exist_ok=True)
 
         for dataset in self.datasets.values():
@@ -1093,7 +1119,7 @@ class TileServer:
         threads = self.config.pre_generation_threads
         print(f"Discover metadata for dataset {dataset.id} (using {threads} threads)")
         metadata = {}
-        with multiprocessing.Pool(threads) as pool:
+        with multiprocessing.get_context("spawn").Pool(threads) as pool:
             metadatas = pool.starmap(ParameterMetadataParser(self.config, dataset.min_max_values_approximate_only, dataset.dataset_config.dataset_path, dataset.id).discover_metadata_for_parameter, [(dataset.parameter_metadata.get(p), p) for p in dataset.real_parameters])
             for m in metadatas:
                 metadata[m.name] = m.to_dict()
@@ -1187,6 +1213,20 @@ class TileServer:
         #     print(f"Finished generating tiles, took {round(time_took_secs * 1000)} milliseconds ({round(time_took_secs * 1000 / tiles_generated)} per tile)")
         return ({"response_type": "tile_data", "metadata": request, "dataSizes": sizes}, [bytes(data)])
             
+    async def handle_cancel_tile_requests(self, data):
+        for block in data.get("blocks", []):
+            dataset = self.datasets.get(block["datasetId"])
+            if not dataset:
+                continue
+            index_dimension = dimension_mapping[block["indexDimension"]]
+            block_path = self.tile_disk_storage.get_block_path(
+                dataset, block["parameter"], index_dimension, block["indexValue"]
+            )
+            flag = self._generation_cancel_flags.get(block_path)
+            if flag:
+                flag.set()
+                print(f"Cancelled generation: {block['datasetId']}/{block['parameter']} {block['indexDimension']}={block['indexValue']}", flush=True)
+
     async def handle_tile_request_standalone(self, socketio, sender_id, request_data):
         dataset_id = request_data["datasetId"]
         parameter = request_data["parameter"]
@@ -1202,19 +1242,87 @@ class TileServer:
         
         tiles = []
         for xy in xys:
-            tiles.append(Tile(self.TILE_SIZE, dataset, parameter, index_dimension, index_value, lod, xy[0], xy[1]))
+            tiles.append(Tile(self.TILE_SIZE, dataset_id, parameter, index_dimension, index_value, lod, xy[0], xy[1]))
 
         blockfile = BlockFile(self.tile_disk_storage, dataset, parameter, index_dimension, index_value)
-        blockfile.load_header()
-        (sizes, data) = blockfile.get_tile_data(tiles)
-
         if blockfile.exists() and not self.ignore_tile_cache:
+            blockfile.load_header()
+            (sizes, data) = blockfile.get_tile_data(tiles)
             await socketio.emit("tile_data", { "metadata": request_data, "dataSizes": sizes, "data": bytes(data) }, to=sender_id)
         else:
             if self.forbid_runtime_tile_generation:
                 print(f"Forbid generation of tile {request_data}")
                 return
-            # await sio.emit("tile_data", { "metadata": r, "data": tile.generate_then_read() }, to=sender_id)
+            is_anomaly = parameter.endswith(ANOMALY_PARAMETER_ID_SUFFIX)
+            real_parameter = parameter[:-len(ANOMALY_PARAMETER_ID_SUFFIX)] if is_anomaly else parameter
+            source_data = dataset.data[real_parameter]
+            block_path = self.tile_disk_storage.get_block_path(dataset, parameter, index_dimension, index_value)
+            if block_path not in self._block_generation_locks:
+                self._block_generation_locks[block_path] = asyncio.Lock()
+            async with self._block_generation_locks[block_path]:
+                if not os.path.exists(block_path):
+                    all_tiles = Tile.get_tiles_in_range(
+                        self.TILE_SIZE, dataset, parameter, index_dimension,
+                        [index_value], range(0, dataset.max_lod + 1)
+                    )
+                    generation_cache = TileGenerationCache(self.tile_disk_storage)
+                    total = len(all_tiles)
+                    tile_compressor = self.tile_compressor
+                    print(f"Generating {total} tile(s) for full block [{dataset_id}/{parameter} {index_dimension.name}={index_value}]", flush=True)
+
+                    cancel_flag = threading.Event()
+                    self._generation_cancel_flags[block_path] = cancel_flag
+
+                    def generate_full_block():
+                        last_pct = -1
+                        for i, tile in enumerate(all_tiles):
+                            if cancel_flag.is_set():
+                                print(f"  -> cancelled at {i}/{total}", flush=True)
+                                break
+                            actual_tile = tile.get_anomaly_tile() if is_anomaly else tile
+                            d = actual_tile.generate_from_data(source_data, tile_compressor)
+                            generation_cache.put_data(tile, d)
+                            pct = (i + 1) * 100 // total
+                            if pct % 10 == 0 and pct != last_pct:
+                                print(f"  {pct}%", flush=True)
+                                last_pct = pct
+
+                    loop = asyncio.get_event_loop()
+                    await loop.run_in_executor(None, generate_full_block)
+                    self._generation_cancel_flags.pop(block_path, None)
+
+                    if cancel_flag.is_set():
+                        return
+
+                    should_save = dataset.enable_caching
+                    if should_save:
+                        used_bytes = self._get_dataset_cache_size_bytes(dataset)
+                        if used_bytes >= dataset.max_cache_gb * 1024 ** 3:
+                            print(f"  -> cache limit reached ({dataset.max_cache_gb} GB), not saving", flush=True)
+                            should_save = False
+
+                    if should_save:
+                        os.makedirs(os.path.dirname(block_path), exist_ok=True)
+                        BlockFile.convert_intermediate_single_tile_files(
+                            self.TILE_SIZE, self.tile_disk_storage, generation_cache,
+                            dataset, parameter, index_dimension, index_value
+                        )
+                        print(f"  -> saved to {block_path}", flush=True)
+                        blockfile2 = BlockFile(self.tile_disk_storage, dataset, parameter, index_dimension, index_value)
+                        blockfile2.load_header()
+                        (sizes, data) = blockfile2.get_tile_data(tiles)
+                    else:
+                        data = bytearray()
+                        sizes = []
+                        for tile in tiles:
+                            d = generation_cache.get_data(tile)
+                            data += d
+                            sizes.append(len(d))
+                else:
+                    blockfile2 = BlockFile(self.tile_disk_storage, dataset, parameter, index_dimension, index_value)
+                    blockfile2.load_header()
+                    (sizes, data) = blockfile2.get_tile_data(tiles)
+            await socketio.emit("tile_data", { "metadata": request_data, "dataSizes": sizes, "data": bytes(data) }, to=sender_id)
 
 class BlockFile:
     def __init__(self, tile_disk_storage: TileDiskStorage, dataset: Dataset, parameter: str, index_dimension: Dimension, index_value: int) -> None:

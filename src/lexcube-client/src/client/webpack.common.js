@@ -2,6 +2,7 @@ const path = require('path');
 const { GitRevisionPlugin } = require('git-revision-webpack-plugin')
 const gitRevisionPlugin = new GitRevisionPlugin()
 const HtmlWebpackPlugin = require('html-webpack-plugin');
+const CopyPlugin = require('copy-webpack-plugin');
 
 const pad = (number) => `0${number}`.slice(-2)
 
@@ -33,6 +34,12 @@ module.exports = {
     },
 
     plugins: [
+        new CopyPlugin({
+            patterns: [
+                { from: path.resolve(__dirname, '../../node_modules/nouislider/dist/nouislider.css'), to: 'nouislider.css' },
+                { from: path.resolve(__dirname, 'static'), to: '.' },
+            ],
+        }),
         new HtmlWebpackPlugin({
             template: 'src/client/index.html',
             filename: "index.html",

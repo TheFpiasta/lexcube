@@ -12,6 +12,7 @@
     "@types/node": "^13.13.15",
     "@types/qrcode": "^1.5.0",
     "@types/three": "^0.144.0",
+    "copy-webpack-plugin": "^14.0.0",
     "git-revision-webpack-plugin": "^5.0.0",
     "html-webpack-plugin": "^5.5.0",
     "javascript-obfuscator": "^4.0.0",
