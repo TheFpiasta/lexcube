@@ -15,7 +15,8 @@
             "calculateYearlyAnomalies": false,
             "hidden": false,
             "flippedY": false,
-            "useOfflineMetadata": false
+            "useOfflineMetadata": false,
+            "notes": {"source": {"url": "n/a"}}
         }
     ]
 }

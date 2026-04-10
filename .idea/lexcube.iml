@@ -7,8 +7,9 @@
       <excludeFolder url="file://$MODULE_DIR$/lexcube/labextension" />
       <excludeFolder url="file://$MODULE_DIR$/lexcube/nbextension" />
       <excludeFolder url="file://$MODULE_DIR$/lib" />
+      <excludeFolder url="file://$MODULE_DIR$/_data" />
     </content>
-    <orderEntry type="inheritedJdk" />
+    <orderEntry type="jdk" jdkName="Python 3.12 (lexcube)" jdkType="Python SDK" />
     <orderEntry type="sourceFolder" forTests="false" />
   </component>
 </module>
