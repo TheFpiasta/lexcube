@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import enum
 import gc
 import json
@@ -144,6 +145,8 @@ class TileCompressor:
         self.tile_data_compressor_default = ZfpCompressor()
         self.tile_data_compressor_lossless = numcodecs.blosc.Blosc()
         self.nan_mask_compressor = numcodecs.lz4.LZ4(5)
+        self.default_compression_tolerance = -1
+        self.anomaly_compression_tolerance = -1
 
     def set_tolerance(self, default_compression_tolerance: float, anomaly_compression_tolerance: float):
         self.default_compression_tolerance = default_compression_tolerance
@@ -261,9 +264,9 @@ def patch_dataset(ds: Union[xr.DataArray, xr.Dataset, np.ndarray]):
 
 def open_dataset(config: ServerConfig, path: str):
     aws_s3_hosted = path.startswith("s3://")
-    http_hosted = path.startswith("http://")
+    http_hosted = path.startswith("http://") or path.startswith("https://")
     remote_hosted = aws_s3_hosted or http_hosted
-    file_extension = path.split(".")[-1]
+    file_extension = path.rstrip("/").split(".")[-1]
     protocol = path.split("://")[0]
     print(f"        > Opening {f'{protocol}-hosted' if remote_hosted else 'locally saved'} dataset ({path})")
     protocol_map = {
@@ -450,9 +453,11 @@ class ParameterMetadataParser:
         local_1quantiles = []
         local_99quantiles = []
         
-        print(f"Find min, max and quantile values {'[approximate only]' if approximate_only else ''} - ", end="", flush=True)
+        total_steps = len(range(first_time_slice, last_time_slice, step))
+        print(f"Find min, max and quantile values {'[approximate only]' if approximate_only else ''} ({total_steps} samples) - ", end="", flush=True)
         for t in range(first_time_slice, last_time_slice, step):
             observations += 1
+            print(f"{observations}/{total_steps}", end="\r", flush=True)
             values = patch_data(parameter_data[t].values, dataset_id, parameter)
             mask = np.abs(values) != np.inf
             local_min = np.nanmin(values[mask], initial=minimum_value)
@@ -1093,7 +1098,7 @@ class TileServer:
         threads = self.config.pre_generation_threads
         print(f"Discover metadata for dataset {dataset.id} (using {threads} threads)")
         metadata = {}
-        with multiprocessing.Pool(threads) as pool:
+        with multiprocessing.get_context("spawn").Pool(threads) as pool:
             metadatas = pool.starmap(ParameterMetadataParser(self.config, dataset.min_max_values_approximate_only, dataset.dataset_config.dataset_path, dataset.id).discover_metadata_for_parameter, [(dataset.parameter_metadata.get(p), p) for p in dataset.real_parameters])
             for m in metadatas:
                 metadata[m.name] = m.to_dict()
@@ -1202,19 +1207,41 @@ class TileServer:
         
         tiles = []
         for xy in xys:
-            tiles.append(Tile(self.TILE_SIZE, dataset, parameter, index_dimension, index_value, lod, xy[0], xy[1]))
+            tiles.append(Tile(self.TILE_SIZE, dataset_id, parameter, index_dimension, index_value, lod, xy[0], xy[1]))
 
         blockfile = BlockFile(self.tile_disk_storage, dataset, parameter, index_dimension, index_value)
-        blockfile.load_header()
-        (sizes, data) = blockfile.get_tile_data(tiles)
-
         if blockfile.exists() and not self.ignore_tile_cache:
+            blockfile.load_header()
+            (sizes, data) = blockfile.get_tile_data(tiles)
             await socketio.emit("tile_data", { "metadata": request_data, "dataSizes": sizes, "data": bytes(data) }, to=sender_id)
         else:
             if self.forbid_runtime_tile_generation:
                 print(f"Forbid generation of tile {request_data}")
                 return
-            # await sio.emit("tile_data", { "metadata": r, "data": tile.generate_then_read() }, to=sender_id)
+            is_anomaly = parameter.endswith(ANOMALY_PARAMETER_ID_SUFFIX)
+            real_parameter = parameter[:-len(ANOMALY_PARAMETER_ID_SUFFIX)] if is_anomaly else parameter
+            source_data = dataset.data[real_parameter]
+            tile_compressor = self.tile_compressor
+            total_tiles = len(tiles)
+            print(f"Generating {total_tiles} tile(s) [{dataset_id}/{parameter} {index_dimension.name}={index_value} lod={lod}]", flush=True)
+            def generate_tiles():
+                tile_data = bytearray()
+                tile_sizes = []
+                last_pct = -1
+                for i, tile in enumerate(tiles):
+                    actual_tile = tile.get_anomaly_tile() if is_anomaly else tile
+                    d = actual_tile.generate_from_data(source_data, tile_compressor)
+                    tile_data += d
+                    tile_sizes.append(len(d))
+                    pct = (i + 1) * 100 // total_tiles
+                    if pct % 10 == 0 and pct != last_pct:
+                        print(f"  {pct}%", flush=True)
+                        last_pct = pct
+                return tile_data, tile_sizes
+            loop = asyncio.get_event_loop()
+            data, sizes = await loop.run_in_executor(None, generate_tiles)
+            print(f"  -> done ({len(data)} bytes)", flush=True)
+            await socketio.emit("tile_data", { "metadata": request_data, "dataSizes": sizes, "data": bytes(data) }, to=sender_id)
 
 class BlockFile:
     def __init__(self, tile_disk_storage: TileDiskStorage, dataset: Dataset, parameter: str, index_dimension: Dimension, index_value: int) -> None:
