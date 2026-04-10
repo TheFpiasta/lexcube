@@ -3695,7 +3695,7 @@ class CubeInteraction {
     }
 
     private selectArbitraryLinearColormap(parameterIndex: number) {
-        const names = ["viridian", "algae", "deep", "dense", "haline", "ice", "speed", "tempo", "turbid"]
+        const names = ["viridis", "algae", "deep", "dense", "haline", "ice", "speed", "tempo", "turbid"]
         this.selectColormapByName(names[parameterIndex % names.length]);
     }
 
