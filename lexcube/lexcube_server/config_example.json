@@ -1,12 +1,12 @@
 {
-    "datasetBaseDir": "C:/code/data-cube",
+    "datasetBaseDir": "_data",
     "tileCacheDir": ".tiles",
     "preGenerationThreads": 4,
     "datasets": [
         {
             "id": "esdc-2.1.1-low-res",
             "shortName": "ESDC 2.1.1 (Low Res)",
-            "datasetPath": "esdc-8d-0.25deg-1x720x1440-2.1.1.zarr",
+            "datasetPath": "http://data.rsc4earth.de/download/EarthSystemDataCube/v2.1.1/esdc-8d-0.25deg-1x720x1440-2.1.1.zarr/",
             "preGenerationSparsity": 10,
             "approximateMinMaxValues": true,
             "ignoredParameters": ["mask", "psurf", "srex_mask", "water_mask", "xch4", "xco2", "fat_p"],
@@ -17,8 +17,16 @@
             "flippedY": false,
             "useOfflineMetadata": false,
             "enableCaching": true,
-            "maxCacheGb": 10,
+            "maxCacheGb": 1,
             "notes": {"source": {"url": "n/a"}}
+        },
+        {
+            "id": "esdc-3.0.2-low-res",
+            "shortName": "ESDC 3.0.2 (Low Res)",
+            "datasetPath": "esdc-16d-2.5deg-46x72x144-3.0.2.zarr",
+            "notes": {"source": {"url": "https://data.rsc4earth.de/download/EarthSystemDataCube/v3.0.2/esdc-16d-2.5deg-46x72x144-3.0.2.zarr/"}},
+            "enableCaching": true,
+            "maxCacheGb": 1
         }
     ]
 }
