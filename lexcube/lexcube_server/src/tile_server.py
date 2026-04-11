@@ -1288,7 +1288,12 @@ class TileServer:
                                 last_pct = pct
 
                     loop = asyncio.get_event_loop()
-                    await loop.run_in_executor(None, generate_full_block)
+                    try:
+                        await loop.run_in_executor(None, generate_full_block)
+                    except Exception as e:
+                        self._generation_cancel_flags.pop(block_path, None)
+                        print(f"  -> tile generation failed [{dataset_id}/{parameter}]: {e}", flush=True)
+                        return
                     self._generation_cancel_flags.pop(block_path, None)
 
                     if cancel_flag.is_set():

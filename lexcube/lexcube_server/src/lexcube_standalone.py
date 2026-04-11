@@ -75,7 +75,10 @@ async def api_dataset(dataset_id: str):
 
 @sio.on("request_tile_data")
 async def handle_request_tile_data(sid, data):
-    await tile_server.handle_tile_request_standalone(sio, sid, data)
+    try:
+        await tile_server.handle_tile_request_standalone(sio, sid, data)
+    except Exception as e:
+        print(f"Unhandled error in request_tile_data: {e}", flush=True)
 
 
 @sio.on("cancel_tile_requests")
