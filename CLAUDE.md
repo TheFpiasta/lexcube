@@ -17,7 +17,7 @@ npm run build         # Dev build
 npm run watch         # Watch mode for TS + webpack
 npm run lint          # ESLint with auto-fix
 npm run lint:check    # ESLint check only
-npm run test          # Jest tests
+npm run test          # Jest tests (deprecated/outdated)
 ```
 
 `npm run build` chains: `build:client` → `build:lib` → `build:nbextension` → `build:labextension`. The `build:client` step compiles `src/lexcube-client/` into its own `dist/` first.
@@ -34,7 +34,7 @@ npm run dev           # Webpack dev server
 **Python:**
 ```bash
 pip install -e ".[test, examples]"   # Dev install (triggers TS build via Hatch hook)
-pytest                               # Python tests
+pytest                               # Python tests (deprecated/outdated)
 python -m build                      # Build wheel for release
 ```
 
@@ -57,6 +57,8 @@ jupyter nbextension enable --sys-prefix --py lexcube
 ```
 
 ## Running Tests
+
+currently all tests are marked as deprecated/outdated.
 
 ```bash
 # Single Python test

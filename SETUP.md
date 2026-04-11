@@ -215,6 +215,8 @@ Frontend changes to `src/lexcube-client/src/client/*.ts` auto-rebuild and hot-re
 
 ## Running Tests
 
+NOTE: CURRENTLY ALL TESTS ARE DEPRICATED AND NOT MAINTAINED. THEY MAY FAIL OR BE INCOMPLETE. USE WITH CAUTION.
+
 ```bash
 pytest                                                      # all Python tests
 pytest lexcube/tests/test_example.py::test_name -v         # single Python test

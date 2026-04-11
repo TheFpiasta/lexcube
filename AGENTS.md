@@ -17,6 +17,8 @@ High-signal repo notes for OpenCode sessions.
 
 ## Tests and lint
 
+Note: currently all tests are deprecated/outdated.
+
 - Jest: `npm run test` or single file `npm run test -- src/__tests__/index.spec.ts`.
 - Pytest uses nbval by default (`pytest.ini` adds `--nbval --current-env`). Single test example: `pytest lexcube/tests/test_example.py::test_example_creation_blank -v`.
 - Lint: `npm run lint` (auto-fix) or `npm run lint:check`.
