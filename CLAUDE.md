@@ -20,6 +20,10 @@ npm run lint:check    # ESLint check only
 npm run test          # Jest tests
 ```
 
+`npm run build` chains: `build:client` → `build:lib` → `build:nbextension` → `build:labextension`. The `build:client` step compiles `src/lexcube-client/` into its own `dist/` first.
+
+**Stale build gotcha:** The Hatch wheel hook uses `skip-if-exists` and won't rebuild if `lexcube/nbextension/index.js` and `lexcube/labextension/package.json` already exist. Delete those files (or run `npm run build:prod` manually) if TS changes aren't reflected after a `pip install -e .`.
+
 **3D client (`src/lexcube-client/`):**
 ```bash
 cd src/lexcube-client
@@ -98,6 +102,24 @@ User (Jupyter Notebook)
 4. As the user rotates/zooms, the client calculates visible tiles and requests them
 5. TileServer reads data chunks, compresses with ZFP, sends back
 6. Frontend decompresses (WebAssembly), updates Three.js textures
+
+### Standalone Mode
+
+The tile server can also run as a standalone HTTP/WebSocket server (not just as a Jupyter widget). In this mode, `socket.io-client` is used on the frontend instead of IPyWidgets messaging, and the server is started via `lexcube/lexcube_server/src/server.py`. The widget bridge (`src/widget.ts`) switches between widget and standalone messaging based on the URL hash.
+
+### Message Protocol
+
+Tile requests are batched: the client sends `{ indexDimension, indexValue, lod, xys: [[x, y], ...] }` grouping multiple XY tile coordinates into one message. The server responds with `{ response_type: "tile_data", metadata, dataSizes: [...], data: <binary> }`. The binary payload packs tiles back-to-back.
+
+Key constants: `API_VERSION = 5`, `TILE_VERSION = 2`, magic bytes `"lexc"`. A `NAN_TILE_MAGIC_NUMBER = -1` in the metadata signals an all-NaN tile (no data payload); `LOSSLESS_TILE_MAGIC_NUMBER = -2` signals Blosc instead of ZFP compression.
+
+### Web Worker / GeoJSON
+
+GeoJSON parsing runs in a dedicated Web Worker (`geojson-loader.worker.ts`) via **Comlink** (RPC over `postMessage`). The rendering thread holds a `wrap<GeoJSONWorkerApi>(worker)` proxy and calls it with `await`. This is the only place the worker pattern is used; all other heavy work runs on the main thread.
+
+### numcodecs.js (WebAssembly Dependency)
+
+The decompression library is **not from the npm registry**. It is bundled as a local tarball at `src/lexcube-client/deps/numcodecs-0.2.5.tgz` and referenced in `src/lexcube-client/package.json`. If it needs updating, replace the tarball and update the version string manually.
 
 ### Key Files
 
