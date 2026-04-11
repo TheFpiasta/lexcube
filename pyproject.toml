@@ -41,7 +41,7 @@ dependencies = [
     "netCDF4>=1.6.3",
     "opencv-python-headless>=4.7.0.72",
     "xarray>=v2022.12.0",
-    "zarr>=2.14.2",
+    "zarr>=2.14.2,<3", # zarr 3.x has breaking API changes incompatible with zarr 2.x datasets
 ]
 version = "1.0.4"
 
