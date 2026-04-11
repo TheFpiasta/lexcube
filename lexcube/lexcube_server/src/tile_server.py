@@ -452,8 +452,8 @@ class ParameterMetadataParser:
 
     def find_min_max_and_quantiles(self, parameter_data: xr.DataArray, dataset_id: str, parameter: str, first_time_slice: int, last_time_slice: int, approximate_only: bool = False):
         step = max(1, math.floor((last_time_slice - first_time_slice + 1) / 150.0)) if approximate_only else 1
-        minimum_value = np.Infinity
-        maximum_value = -np.Infinity
+        minimum_value = np.inf
+        maximum_value = -np.inf
         observations = 0
         local_1quantiles = []
         local_99quantiles = []
