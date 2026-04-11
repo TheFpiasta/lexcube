@@ -9,7 +9,7 @@
       <excludeFolder url="file://$MODULE_DIR$/lib" />
       <excludeFolder url="file://$MODULE_DIR$/_data" />
     </content>
-    <orderEntry type="jdk" jdkName="Python 3.12 (lexcube)" jdkType="Python SDK" />
+    <orderEntry type="jdk" jdkName="Python 3.13 (lexcube)" jdkType="Python SDK" />
     <orderEntry type="sourceFolder" forTests="false" />
   </component>
 </module>
