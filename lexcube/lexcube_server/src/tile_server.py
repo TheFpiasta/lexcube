@@ -1037,8 +1037,8 @@ class Tile:
         return os.path.exists(path)
 
     def read_from_intermediate_single_file(self, path: str, suffix=""):
-        file = open(path + suffix, "rb")
-        return file.read()
+        with open(path + suffix, "rb") as file:
+            return file.read()
 
     def write_to_intermediate_single_file(self, path: str, compressed_data: bytes, suffix=""):
         with open(path + suffix, "wb") as f:
@@ -1194,6 +1194,10 @@ class TileServer:
         self._foreground_idle_event = threading.Event()
         self._foreground_idle_event.set()
         self._shutdown_event = threading.Event()
+        self._cache_size_lock = threading.Lock()
+        self._dataset_cache_size_bytes: dict[str, int] = {}
+        self._dataset_cache_write_counts: dict[str, int] = {}
+        self._cache_size_refresh_write_interval = 100
 
     def _get_dataset_cache_size_bytes(self, dataset: Dataset) -> int:
         dataset_dir = os.path.join(self.tile_disk_storage.directory, dataset.id)
@@ -1205,6 +1209,20 @@ class TileServer:
                 except OSError:
                     pass
         return total
+
+    def _get_cached_dataset_cache_size_bytes(self, dataset: Dataset) -> int:
+        with self._cache_size_lock:
+            cached = self._dataset_cache_size_bytes.get(dataset.id)
+            if cached is not None:
+                return cached
+        cached = self._get_dataset_cache_size_bytes(dataset)
+        with self._cache_size_lock:
+            existing = self._dataset_cache_size_bytes.get(dataset.id)
+            if existing is None:
+                self._dataset_cache_size_bytes[dataset.id] = cached
+                self._dataset_cache_write_counts.setdefault(dataset.id, 0)
+                return cached
+            return existing
 
     def _foreground_request_started(self) -> None:
         with self._foreground_lock:
@@ -1230,7 +1248,7 @@ class TileServer:
     def _can_write_cache(self, dataset: Dataset) -> bool:
         if not dataset.caching_enabled():
             return False
-        used_bytes = self._get_dataset_cache_size_bytes(dataset)
+        used_bytes = self._get_cached_dataset_cache_size_bytes(dataset)
         if used_bytes >= dataset.max_cache_gb * 1024 ** 3:
             print(f"  -> cache limit reached ({dataset.max_cache_gb} GB), not saving", flush=True)
             return False
@@ -1241,7 +1259,34 @@ class TileServer:
             return
         if not self._can_write_cache(dataset):
             return
+        path = self.tile_disk_storage.get_tile_path(tile)
+        old_size = 0
+        try:
+            if os.path.exists(path):
+                old_size = os.path.getsize(path)
+        except OSError:
+            old_size = 0
         self.tile_disk_cache.write_tile(tile, data)
+        new_size = len(data)
+        refresh = False
+        needs_init = False
+        with self._cache_size_lock:
+            current_size = self._dataset_cache_size_bytes.get(dataset.id)
+            if current_size is None:
+                needs_init = True
+                current_size = 0
+            self._dataset_cache_size_bytes[dataset.id] = max(0, current_size + (new_size - old_size))
+            write_count = self._dataset_cache_write_counts.get(dataset.id, 0) + 1
+            self._dataset_cache_write_counts[dataset.id] = write_count
+            refresh = write_count % self._cache_size_refresh_write_interval == 0
+        if needs_init:
+            init_size = self._get_dataset_cache_size_bytes(dataset)
+            with self._cache_size_lock:
+                self._dataset_cache_size_bytes[dataset.id] = init_size
+        if refresh:
+            refreshed_size = self._get_dataset_cache_size_bytes(dataset)
+            with self._cache_size_lock:
+                self._dataset_cache_size_bytes[dataset.id] = refreshed_size
 
     def update_progress(self, request_group_id: int, request_id: int, done: int, total: int = -1,
                         touched_chunks: set = None):
