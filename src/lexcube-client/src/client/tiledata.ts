@@ -16,9 +16,29 @@
     along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
-import { Color, DataArrayTexture, Texture, RedFormat, FloatType, LinearFilter, NearestFilter, ClampToEdgeWrapping } from 'three'
+import {
+    Color,
+    DataArrayTexture,
+    Texture,
+    RedFormat,
+    FloatType,
+    LinearFilter,
+    NearestFilter,
+    ClampToEdgeWrapping
+} from 'three';
 
-import { COLORMAP_STEPS, CubeFace, Dimension, LOSSLESS_TILE_MAGIC_NUMBER, NAN_REPLACEMENT_VALUE, NAN_TILE_MAGIC_NUMBER, NOT_LOADED_REPLACEMENT_VALUE, TILE_FORMAT_MAGIC_BYTES, TILE_SIZE, TILE_VERSION } from './constants';
+import {
+    COLORMAP_STEPS,
+    CubeFace,
+    Dimension,
+    LOSSLESS_TILE_MAGIC_NUMBER,
+    NAN_REPLACEMENT_VALUE,
+    NAN_TILE_MAGIC_NUMBER,
+    NOT_LOADED_REPLACEMENT_VALUE,
+    TILE_FORMAT_MAGIC_BYTES,
+    TILE_SIZE,
+    TILE_VERSION
+} from './constants';
 import { CubeClientContext } from './client';
 
 import { Blosc, ZFP, LZ4 } from 'numcodecs';
@@ -27,19 +47,45 @@ class Tile {
     static fromResponseData(metadata: any): Tile[] {
         const tiles = [];
         for (let xy of metadata.xys) {
-            tiles.push(new Tile(metadata.face, metadata.indexValue, metadata.lod, xy[0], xy[1], metadata.datasetId, metadata.parameter))
+            tiles.push(
+                new Tile(
+                    metadata.face,
+                    metadata.indexValue,
+                    metadata.lod,
+                    xy[0],
+                    xy[1],
+                    metadata.datasetId,
+                    metadata.parameter
+                )
+            );
         }
         return tiles;
     }
 
     static fromHashKey(context: CubeClientContext, key: string): Tile {
-        const s = key.split("_");
-        return new Tile(Number(s[0]), Number(s[1]), Number(s[2]), Number(s[3]), Number(s[4]), context.interaction.selectedCube.id, context.interaction.selectedParameterId);
+        const s = key.split('_');
+        return new Tile(
+            Number(s[0]),
+            Number(s[1]),
+            Number(s[2]),
+            Number(s[3]),
+            Number(s[4]),
+            context.interaction.selectedCube.id,
+            context.interaction.selectedParameterId
+        );
     }
 
-    constructor(face: CubeFace, indexValue: number, lod: number, tileX: number, tileY: number, cubeId: string, parameter: string) {
+    constructor(
+        face: CubeFace,
+        indexValue: number,
+        lod: number,
+        tileX: number,
+        tileY: number,
+        cubeId: string,
+        parameter: string
+    ) {
         this.cubeId = cubeId;
-        this.parameter = parameter ;
+        this.parameter = parameter;
         this.face = face;
         this.indexValue = indexValue;
         this.lod = lod;
@@ -52,7 +98,7 @@ class Tile {
     }
 
     indexDimension() {
-        return (this.face <= 1 ? Dimension.Z : (this.face <= 3 ? Dimension.Y : Dimension.X));
+        return this.face <= 1 ? Dimension.Z : this.face <= 3 ? Dimension.Y : Dimension.X;
     }
 
     getRequestData() {
@@ -65,9 +111,9 @@ class Tile {
             lod: this.lod,
             tileX: this.x,
             tileY: this.y
-        }
+        };
     }
-    
+
     getRequestDataWithMultipleXYs(xys: number[][]) {
         return {
             face: this.face,
@@ -76,10 +122,10 @@ class Tile {
             indexDimension: `by_${Dimension[this.indexDimension()].toLowerCase()}`,
             indexValue: this.indexValue,
             lod: this.lod,
-            xys: xys,
-        }
+            xys: xys
+        };
     }
-    
+
     getHashKey() {
         return `${this.face}_${this.indexValue}_${this.lod}_${this.x}_${this.y}_${this.cubeId}_${this.parameter}`;
     }
@@ -110,7 +156,7 @@ class TileData {
     private observedValuesVariance = 0;
     statisticalColormapLowerBound = 0;
     statisticalColormapUpperBound = 0;
-    
+
     private textureFilteringEnabled;
 
     observedMinValue = Infinity;
@@ -118,29 +164,33 @@ class TileData {
 
     private lastObservedMinValue = 0;
     private lastObservedMaxValue = 0;
-    
-    private currentColormap: Array<ColormapEntry> = [];    
-    private fastColormap: Uint8Array = new Uint8Array(COLORMAP_STEPS * 4);    
+
+    private currentColormap: Array<ColormapEntry> = [];
+    private fastColormap: Uint8Array = new Uint8Array(COLORMAP_STEPS * 4);
     private colorsNotFound = 0;
     private colormapFlipped = false;
     colormapUseStandardDeviation = true;
     colormapMinValueOverride: number | null = null;
     colormapMaxValueOverride: number | null = null;
     symmetricalColormapAroundZero = false;
-    
+
     private tileStoragesColor!: Uint8Array[][];
     private tileStoragesFloat!: Float32Array[][];
-    
+
     private tilesDownloadFinished = new Array<Map<string, boolean>>();
-    private tilesDownloadTriggered = new Array<Map<string, boolean>>(); 
+    private tilesDownloadTriggered = new Array<Map<string, boolean>>();
     tileDownloadsTriggered: number = 0;
     tileDownloadsFinished: number = 0;
     tileDownloadsFailed: number = 0;
     tileDecodesFailed: number = 0;
-    
+
     // private compressor = Blosc.fromConfig({ id: Blosc.codecId, clevel: 5 , cname: "lz4", shuffle: 1 });
     private tileCompressorDefault = ZFP.fromConfig({ id: ZFP.codecId });
-    private tileCompressorLossless = Blosc.fromConfig({ id: Blosc.codecId, cname: "lz4", shuffle: 1 });
+    private tileCompressorLossless = Blosc.fromConfig({
+        id: Blosc.codecId,
+        cname: 'lz4',
+        shuffle: 1
+    });
     private nanMaskCompressor = LZ4.fromConfig({ id: LZ4.codecId });
     private context: CubeClientContext;
     private colormapMinValue: number = 0;
@@ -156,9 +206,13 @@ class TileData {
         this.context = context;
         this.textureFilteringEnabled = this.context.textureFilteringEnabled;
     }
-    
 
-    private updateStatisticalMeasures(tileMin: number, tileMax: number, tileMean: number, tileVariance: number) {
+    private updateStatisticalMeasures(
+        tileMin: number,
+        tileMax: number,
+        tileMean: number,
+        tileVariance: number
+    ) {
         if (isNaN(tileMin)) {
             return;
         }
@@ -179,29 +233,46 @@ class TileData {
 
     private updateStatisticalColormapBounds() {
         const standardDeviation = Math.sqrt(this.observedValuesVariance);
-        this.statisticalColormapLowerBound = Math.max(this.observedValuesMean - (2.5 * standardDeviation), this.observedMinValue);
-        this.statisticalColormapUpperBound = Math.min(this.observedValuesMean + (2.5 * standardDeviation), this.observedMaxValue);
+        this.statisticalColormapLowerBound = Math.max(
+            this.observedValuesMean - 2.5 * standardDeviation,
+            this.observedMinValue
+        );
+        this.statisticalColormapUpperBound = Math.min(
+            this.observedValuesMean + 2.5 * standardDeviation,
+            this.observedMaxValue
+        );
     }
 
     async receiveTile(tile: Tile, data: ArrayBuffer) {
-        if (tile.cubeId != this.context.interaction.selectedCube.id || tile.parameter != this.context.interaction.selectedParameterId) {
-            this.context.log("Received outdated tile (cube and/or parameter has changed)")
+        if (
+            tile.cubeId != this.context.interaction.selectedCube.id ||
+            tile.parameter != this.context.interaction.selectedParameterId
+        ) {
+            this.context.log('Received outdated tile (cube and/or parameter has changed)');
             return;
         }
-        if (tile.indexValue != this.context.interaction.cubeSelection.getIndexValueForFace(tile.face)) {
-            this.context.log("Receive outdated tile (index value has changed)");
+        if (
+            tile.indexValue !=
+            this.context.interaction.cubeSelection.getIndexValueForFace(tile.face)
+        ) {
+            this.context.log('Receive outdated tile (index value has changed)');
             this.context.tileData.addTileDownloadsFinished(1);
             return;
         }
         this.allocateTexture(tile.face, tile.lod);
-        
+
         const magic_bytes = new Uint8Array(data, 0, 4);
         if (TILE_FORMAT_MAGIC_BYTES !== String.fromCharCode(...magic_bytes)) {
-            return console.error("Received tile has invalid magic bytes")
+            return console.error('Received tile has invalid magic bytes');
         }
         const tile_version = new Uint32Array(data, 4, 1)[0];
         if (tile_version !== TILE_VERSION) {
-            return console.error("Received tile has invalid tile version:", tile_version, "Expected:", TILE_VERSION)
+            return console.error(
+                'Received tile has invalid tile version:',
+                tile_version,
+                'Expected:',
+                TILE_VERSION
+            );
         }
         const maxErrorOrMagicNumber = new Float64Array(data, 16, 1)[0];
         if (maxErrorOrMagicNumber == NAN_TILE_MAGIC_NUMBER) {
@@ -220,22 +291,39 @@ class TileData {
             this.updateStatisticalMeasures(tileMin, tileMax, tileMean, tileVariance);
 
             const lossless_tile = maxErrorOrMagicNumber == LOSSLESS_TILE_MAGIC_NUMBER;
-            this.maxCompressionErrors.set(tile.getHashKey(), lossless_tile ? 0 : maxErrorOrMagicNumber);
+            this.maxCompressionErrors.set(
+                tile.getHashKey(),
+                lossless_tile ? 0 : maxErrorOrMagicNumber
+            );
 
             try {
                 if (lossless_tile) {
                     const tileData = await this.tileCompressorLossless.decode(tileDataBytes);
                     if (resampleResolution > 1) {
-                        this.putResampledTileInStorage(tile, tileData.buffer, undefined, resampleResolution, true);
+                        this.putResampledTileInStorage(
+                            tile,
+                            tileData.buffer,
+                            undefined,
+                            resampleResolution,
+                            true
+                        );
                     } else {
                         this.putTileInStorage(tile, tileData.buffer, undefined, true);
                     }
                 } else {
-                    const result = await Promise.all([this.nanMaskCompressor.decode(nanMaskHeaderBytes), this.tileCompressorDefault.decode(tileDataBytes)]);
+                    const result = await Promise.all([
+                        this.nanMaskCompressor.decode(nanMaskHeaderBytes),
+                        this.tileCompressorDefault.decode(tileDataBytes)
+                    ]);
                     const nanMaskSource = result[0];
                     const tileData = result[1];
                     if (resampleResolution > 1) {
-                        this.putResampledTileInStorage(tile, tileData.buffer, nanMaskSource.buffer, resampleResolution);
+                        this.putResampledTileInStorage(
+                            tile,
+                            tileData.buffer,
+                            nanMaskSource.buffer,
+                            resampleResolution
+                        );
                     } else {
                         this.putTileInStorage(tile, tileData.buffer, nanMaskSource.buffer);
                     }
@@ -244,20 +332,27 @@ class TileData {
                 this.tilesDownloadTriggered[tile.face].delete(tile.getHashKey());
                 this.tileDecodesFailed += 1;
                 this.updateStatusMessage();
-                console.error(`Tile (${CubeFace[tile.face]}) at ${tile.indexValue} with LoD ${tile.lod} and x: ${tile.x} y: ${tile.y} failed to decode:`, error);
+                console.error(
+                    `Tile (${CubeFace[tile.face]}) at ${tile.indexValue} with LoD ${tile.lod} and x: ${tile.x} y: ${tile.y} failed to decode:`,
+                    error
+                );
                 return;
-            };
+            }
         }
-        
+
         this.updateStatisticalColormapBounds();
         this.colormapTile(tile);
 
         this.context.tileData.addTileDownloadsFinished(1);
         this.tilesDownloadFinished[tile.face].set(tile.getHashKey(), true);
-        if (this.tilesDownloadTriggered[tile.face].size == this.tilesDownloadFinished[tile.face].size) {
+        if (
+            this.tilesDownloadTriggered[tile.face].size ==
+            this.tilesDownloadFinished[tile.face].size
+        ) {
             this.context.rendering.revealLodForFace(tile.face);
         }
-        const lastDownload = this.tileDownloadsFinished + this.tileDownloadsFailed == this.tileDownloadsTriggered;
+        const lastDownload =
+            this.tileDownloadsFinished + this.tileDownloadsFailed == this.tileDownloadsTriggered;
         if (lastDownload) {
             this.context.rendering.setAllTilesDownloaded();
         }
@@ -265,7 +360,10 @@ class TileData {
             this.context.rendering.showDataForFace(tile.face);
         }
         if (lastDownload || this.context.widgetMode) {
-            if (this.lastObservedMaxValue == this.observedMaxValue && this.lastObservedMinValue == this.observedMinValue) {
+            if (
+                this.lastObservedMaxValue == this.observedMaxValue &&
+                this.lastObservedMinValue == this.observedMinValue
+            ) {
                 return;
             }
             this.lastObservedMaxValue = this.observedMaxValue;
@@ -275,7 +373,11 @@ class TileData {
     }
 
     allTileDownloadsFinished() {
-        return this.context.interaction.fullyLoaded && this.tileDownloadsFinished + this.tileDownloadsFailed == this.tileDownloadsTriggered && this.context.rendering.dataShown();
+        return (
+            this.context.interaction.fullyLoaded &&
+            this.tileDownloadsFinished + this.tileDownloadsFailed == this.tileDownloadsTriggered &&
+            this.context.rendering.dataShown()
+        );
     }
 
     private putNaNTileInStorage(tile: Tile) {
@@ -290,7 +392,13 @@ class TileData {
         }
     }
 
-    patchTileValues(tile: Tile, values: Float32Array | Float64Array, nanMask: ArrayBuffer | undefined, resampleResolution: number, replaceRealNans: boolean) {
+    patchTileValues(
+        tile: Tile,
+        values: Float32Array | Float64Array,
+        nanMask: ArrayBuffer | undefined,
+        resampleResolution: number,
+        replaceRealNans: boolean
+    ) {
         let anyNanToDisableLinearTextureFiltering = false;
         if (replaceRealNans) {
             for (let i = 0; i < values.length; i++) {
@@ -299,7 +407,8 @@ class TileData {
                 }
             }
             if (this.textureFilteringEnabled) {
-                anyNanToDisableLinearTextureFiltering = anyNanToDisableLinearTextureFiltering || values.some(v => isNaN(v));
+                anyNanToDisableLinearTextureFiltering =
+                    anyNanToDisableLinearTextureFiltering || values.some((v) => isNaN(v));
             }
         }
         if (nanMask) {
@@ -310,18 +419,24 @@ class TileData {
                 }
             }
             if (this.textureFilteringEnabled) {
-                anyNanToDisableLinearTextureFiltering = anyNanToDisableLinearTextureFiltering || nanValues.some(v => v != 0);
+                anyNanToDisableLinearTextureFiltering =
+                    anyNanToDisableLinearTextureFiltering || nanValues.some((v) => v != 0);
             }
         }
-        
+
         const overflowing = this.applyOverflowingTileFix(tile, values, resampleResolution);
 
-        if (anyNanToDisableLinearTextureFiltering && this.textureFilteringEnabled && !overflowing) { // overflow tiles always contain NaN, hence we ignore them
+        if (anyNanToDisableLinearTextureFiltering && this.textureFilteringEnabled && !overflowing) {
+            // overflow tiles always contain NaN, hence we ignore them
             this.disableLinearTextureFiltering();
         }
     }
-    
-    private applyOverflowingTileFix(tile: Tile, values: Float32Array | Float64Array, resampleResolution: number = 1) {
+
+    private applyOverflowingTileFix(
+        tile: Tile,
+        values: Float32Array | Float64Array,
+        resampleResolution: number = 1
+    ) {
         const overflowInfo = this.context.interaction.cubeDimensions.getOverflowEdgeTileInfo(tile);
         if (!overflowInfo.overflowing) {
             return;
@@ -349,20 +464,35 @@ class TileData {
         if (overflowInfo.overflowingY) {
             // fill bottom (and diagonal bottom right) side with previous row values
             const yRowToCopy = overflowInfo.yCutoff - 1;
-            const copiedRow = values.slice(yRowToCopy * TILE_SIZE, yRowToCopy * TILE_SIZE + Math.min(overflowInfo.xCutoff + pixelFillAmount, TILE_SIZE));
-            for (let y = overflowInfo.yCutoff; y < Math.min(overflowInfo.yCutoff + pixelFillAmount, TILE_SIZE); y++) {
+            const copiedRow = values.slice(
+                yRowToCopy * TILE_SIZE,
+                yRowToCopy * TILE_SIZE + Math.min(overflowInfo.xCutoff + pixelFillAmount, TILE_SIZE)
+            );
+            for (
+                let y = overflowInfo.yCutoff;
+                y < Math.min(overflowInfo.yCutoff + pixelFillAmount, TILE_SIZE);
+                y++
+            ) {
                 values.set(copiedRow, y * TILE_SIZE);
             }
         }
         return overflowInfo.overflowing;
     }
 
-    private putResampledTileInStorage(tile: Tile, data: ArrayBuffer, nanMask: ArrayBuffer | undefined, resampleResolution: number, replaceRealNans: boolean = false) {
-        const seemsLikeFloat64 = data.byteLength == (TILE_SIZE * TILE_SIZE * 8);
+    private putResampledTileInStorage(
+        tile: Tile,
+        data: ArrayBuffer,
+        nanMask: ArrayBuffer | undefined,
+        resampleResolution: number,
+        replaceRealNans: boolean = false
+    ) {
+        const seemsLikeFloat64 = data.byteLength == TILE_SIZE * TILE_SIZE * 8;
         let values = seemsLikeFloat64 ? new Float64Array(data) : new Float32Array(data);
         // console.log(`Putting tile in storage: ${tile}`);
         if (values.length != TILE_SIZE * TILE_SIZE) {
-            console.warn(`Badly sized value array passed to putTile (${values.length} instead of ${TILE_SIZE * TILE_SIZE})`)
+            console.warn(
+                `Badly sized value array passed to putTile (${values.length} instead of ${TILE_SIZE * TILE_SIZE})`
+            );
         }
         let xTiles = this.context.interaction.cubeDimensions.xTilesForFace(tile.face, tile.lod);
 
@@ -387,13 +517,20 @@ class TileData {
             this.tileStoragesFloat[tile.face][tile.lod][storageIndex] = values[accessIndex];
         }
     }
-    
-    private putTileInStorage(tile: Tile, data: ArrayBuffer, nanMask: ArrayBuffer | undefined, replaceRealNans: boolean = false) {
-        const seemsLikeFloat64 = data.byteLength == (TILE_SIZE * TILE_SIZE * 8);
+
+    private putTileInStorage(
+        tile: Tile,
+        data: ArrayBuffer,
+        nanMask: ArrayBuffer | undefined,
+        replaceRealNans: boolean = false
+    ) {
+        const seemsLikeFloat64 = data.byteLength == TILE_SIZE * TILE_SIZE * 8;
         let values = seemsLikeFloat64 ? new Float64Array(data) : new Float32Array(data);
         // console.log(`Putting tile in storage: ${tile}`);
         if (values.length != TILE_SIZE * TILE_SIZE) {
-            console.warn(`Badly sized value array passed to putTile (${values.length} instead of ${TILE_SIZE * TILE_SIZE})`)
+            console.warn(
+                `Badly sized value array passed to putTile (${values.length} instead of ${TILE_SIZE * TILE_SIZE})`
+            );
         }
         let xTiles = this.context.interaction.cubeDimensions.xTilesForFace(tile.face, tile.lod);
 
@@ -404,21 +541,23 @@ class TileData {
 
         this.tileStoragesFloat[tile.face][tile.lod].set(values, startIndex);
     }
-    
+
     colormapTile(tile: Tile) {
         // let xTiles = this.context.interaction.selectedCubeDimensions.xTilesForFace(tile.face, tile.lod);
-    
+
         // const tileIndex = tile.x + tile.y * xTiles;
         // const startIndex = tileIndex * TILE_SIZE * TILE_SIZE;
         // const endIndex = (tileIndex + 1) * TILE_SIZE * TILE_SIZE;
-    
+
         // for (let index = startIndex, i = 0; index < endIndex; index++, i++) {
         //     const v = this.tileStoragesFloat[tile.face][tile.lod][index];
         //     const b = index * 4;
         //     const col = this.colormap(v);
         //     this.tileStoragesColor[tile.face][tile.lod].set(col, b);
         // }
-        this.context.rendering.cube.material[tile.face].uniforms[`tilesLod${tile.lod}`].value.needsUpdate = true;
+        this.context.rendering.cube.material[tile.face].uniforms[
+            `tilesLod${tile.lod}`
+            ].value.needsUpdate = true;
         this.context.rendering.requestRender();
     }
 
@@ -440,11 +579,11 @@ class TileData {
             if (this.colormapMaxValueOverride !== null) {
                 maxValue = this.colormapMaxValueOverride;
             }
-    
+
             if (this.symmetricalColormapAroundZero) {
                 const largerValue = Math.max(Math.abs(minValue), Math.abs(maxValue));
                 minValue = -largerValue;
-                maxValue = largerValue;    
+                maxValue = largerValue;
             }
 
             this.colormapMinValue = minValue;
@@ -452,22 +591,38 @@ class TileData {
             const targetPrecision = this.context.interaction.getColormapMinMaxValuePrecision();
             if (targetPrecision < Infinity) {
                 if (this.colormapMinValueOverride === null) {
-                    this.colormapMinValue = Math.round(this.colormapMinValue * 10**targetPrecision) / 10**targetPrecision;
+                    this.colormapMinValue =
+                        Math.round(this.colormapMinValue * 10 ** targetPrecision) /
+                        10 ** targetPrecision;
                 }
                 if (this.colormapMaxValueOverride === null) {
-                    this.colormapMaxValue = Math.round(this.colormapMaxValue * 10**targetPrecision) / 10**targetPrecision;
+                    this.colormapMaxValue =
+                        Math.round(this.colormapMaxValue * 10 ** targetPrecision) /
+                        10 ** targetPrecision;
                 }
             }
-            this.context.log("Colormap options changed", this.colormapMinValue, this.colormapMaxValue, this.colormapFlipped);
-            this.context.rendering.updateColormapOptions(this.colormapMinValue, this.colormapMaxValue, this.colormapFlipped);
+            this.context.log(
+                'Colormap options changed',
+                this.colormapMinValue,
+                this.colormapMaxValue,
+                this.colormapFlipped
+            );
+            this.context.rendering.updateColormapOptions(
+                this.colormapMinValue,
+                this.colormapMaxValue,
+                this.colormapFlipped
+            );
             if (changeScaleTexts) {
-                this.context.interaction.updateColormapScaleTexts(this.colormapMinValue, this.colormapMaxValue);
+                this.context.interaction.updateColormapScaleTexts(
+                    this.colormapMinValue,
+                    this.colormapMaxValue
+                );
             }
             this.context.interaction.updateColormapRangePlaceholders();
         }
 
         if (colormapChanged) {
-            this.context.log("Colormap texture changed")
+            this.context.log('Colormap texture changed');
             this.updateFastColormap();
             this.context.rendering.updateColormapTexture(this.fastColormap);
         }
@@ -485,8 +640,8 @@ class TileData {
         return this.colormapFlipped;
     }
 
-    selectedColormapName: string = "";
-    
+    selectedColormapName: string = '';
+
     selectColormapByName(name: string) {
         try {
             const colormapData = this.context.interaction.getColormapDataFromName(name);
@@ -494,13 +649,13 @@ class TileData {
             this.selectedColormapName = name;
             return true;
         } catch (error) {
-            this.context.log("Failed to select colormap", name, error);
+            this.context.log('Failed to select colormap', name, error);
             return false;
         }
     }
 
     selectColormapByData(data: Array<Array<number>>) {
-        this.selectedColormapName = "Custom Colormap";
+        this.selectedColormapName = 'Custom Colormap';
 
         this.currentColormap.splice(0, this.currentColormap.length);
 
@@ -520,19 +675,23 @@ class TileData {
         for (let i = 0; i < colors.length - 1; i++) {
             const previous = colors[i];
             const next = colors[i + 1];
-            
+
             if (previous.value <= p && next.value >= p) {
-                return new Color().lerpColors(previous.color, next.color, (p - previous.value) / (next.value - previous.value))
+                return new Color().lerpColors(
+                    previous.color,
+                    next.color,
+                    (p - previous.value) / (next.value - previous.value)
+                );
             }
         }
         // console.error(`Color map did not find color. Value: ${v} Minvalue: ${minValue} Maxvalue: ${maxValue} colormapMinValueOverride ${this.colormapMinValueOverride} colormapMaxValueOverride ${this.colormapMaxValueOverride}`);
         this.colorsNotFound++;
-        return new Color("white");
+        return new Color('white');
     }
 
     private updateFastColormap() {
         for (let i = 0; i <= COLORMAP_STEPS; i++) {
-            const col = this.getColorFromColormap(i * 1.0 / COLORMAP_STEPS);
+            const col = this.getColorFromColormap((i * 1.0) / COLORMAP_STEPS);
             this.fastColormap[i * 4 + 0] = col.r;
             this.fastColormap[i * 4 + 1] = col.g;
             this.fastColormap[i * 4 + 2] = col.b;
@@ -549,11 +708,15 @@ class TileData {
             }
             for (let face = 0; face < 6; face++) {
                 const material = this.context.rendering.cube.material[face];
-                for (let lod = 0; lod <= this.context.interaction.selectedCubeMetadata.max_lod; lod++) {
+                for (
+                    let lod = 0;
+                    lod <= this.context.interaction.selectedCubeMetadata.max_lod;
+                    lod++
+                ) {
                     material.uniforms[`tilesLod${lod}`].value.needsUpdate = true;
                 }
             }
-            this.context.log("Recycled existing textures and float32 arrays");
+            this.context.log('Recycled existing textures and float32 arrays');
             return;
         }
         this.tileStoragesFloat = [];
@@ -569,23 +732,28 @@ class TileData {
     }
 
     private allocateTexture(face: CubeFace, lod: number) {
-        const key = `${face}-${lod}`
+        const key = `${face}-${lod}`;
         if (this.storagesAllocated.has(key)) {
             return;
         }
         this.storagesAllocated.add(key);
-        
+
         const material = this.context.rendering.cube.material[face];
         if (material.uniforms[`tilesLod${lod}`].value) {
-            (material.uniforms[`tilesLod${lod}`].value as Texture).dispose();
+            ;(material.uniforms[`tilesLod${lod}`].value as Texture).dispose();
         }
         const totalTiles = this.context.interaction.cubeDimensions.totalTilesForFace(face, lod);
-        const totalValues = (TILE_SIZE * TILE_SIZE) * totalTiles;
+        const totalValues = TILE_SIZE * TILE_SIZE * totalTiles;
         const totalBytes = 4 * totalValues;
         this.tileStoragesFloat[face][lod] = new Float32Array(totalValues);
         this.tileStoragesFloat[face][lod].fill(NOT_LOADED_REPLACEMENT_VALUE);
-        
-        const texture = new DataArrayTexture(this.tileStoragesFloat[face][lod], TILE_SIZE, TILE_SIZE, totalTiles);
+
+        const texture = new DataArrayTexture(
+            this.tileStoragesFloat[face][lod],
+            TILE_SIZE,
+            TILE_SIZE,
+            totalTiles
+        );
         // texture.generateMipmaps = true;
         texture.magFilter = NearestFilter;
         texture.minFilter = this.textureFilteringEnabled ? LinearFilter : NearestFilter;
@@ -603,7 +771,10 @@ class TileData {
             }
         }
 
-        this.context.log("Creating texture with minFilter: ", texture.minFilter == NearestFilter ? "NearestFilter" : "LinearFilter")
+        this.context.log(
+            'Creating texture with minFilter: ',
+            texture.minFilter == NearestFilter ? 'NearestFilter' : 'LinearFilter'
+        );
         texture.wrapS = ClampToEdgeWrapping;
         texture.wrapT = ClampToEdgeWrapping;
         // texture.needsUpdate = true;
@@ -612,18 +783,20 @@ class TileData {
         material.uniforms[`tilesLod${lod}`].value = texture;
         // console.log(`Cube side ${CubeFace[face]}, LoD ${lod}, TotalTiles ${totalTiles}, allocating ${totalBytes / (1024)} KB`)
         this.totalBytesAllocated += totalBytes;
-        this.context.log(`Allocated CPU-side tile storage for face ${CubeFace[face]}, LoD ${lod} (new: ${totalBytes / (1024 * 1024)} MB, total: ${this.totalBytesAllocated / (1024 * 1024)} MB)`)
+        this.context.log(
+            `Allocated CPU-side tile storage for face ${CubeFace[face]}, LoD ${lod} (new: ${totalBytes / (1024 * 1024)} MB, total: ${this.totalBytesAllocated / (1024 * 1024)} MB)`
+        );
     }
 
     private disableLinearTextureFiltering() {
         this.textureFilteringEnabled = false;
-        this.context.log("Linear minFilter on all textures disabled");
+        this.context.log('Linear minFilter on all textures disabled');
 
         for (let face = 0; face < 6; face++) {
             for (let lod = 0; lod <= this.context.interaction.selectedCubeMetadata.max_lod; lod++) {
                 const material = this.context.rendering.cube.material[face];
                 const texture = material.uniforms[`tilesLod${lod}`].value as DataArrayTexture;
-                if (!texture) {   
+                if (!texture) {
                     continue;
                 }
                 texture.minFilter = NearestFilter;
@@ -632,20 +805,25 @@ class TileData {
             }
         }
     }
-    
+
     resetTileStatistics() {
-       this.tileDownloadsTriggered = 0;
-       this.tileDownloadsFinished = 0;
-       this.tileDownloadsFailed = 0;
-       this.tileDecodesFailed = 0;
+        this.tileDownloadsTriggered = 0;
+        this.tileDownloadsFinished = 0;
+        this.tileDownloadsFailed = 0;
+        this.tileDecodesFailed = 0;
     }
 
     updateStatusMessage() {
         if (!this.context.widgetMode) {
-            this.context.interaction.updateStatusMessage(this.tileDownloadsTriggered, this.tileDownloadsFinished, this.tileDownloadsFailed, this.tileDecodesFailed);
+            this.context.interaction.updateStatusMessage(
+                this.tileDownloadsTriggered,
+                this.tileDownloadsFinished,
+                this.tileDownloadsFailed,
+                this.tileDecodesFailed
+            );
         }
     }
-    
+
     resetDataStatistics() {
         this.observedMinValue = Infinity;
         this.observedMaxValue = -Infinity;
@@ -671,24 +849,34 @@ class TileData {
             this.tilesDownloadFinished.push(new Map<string, boolean>());
         }
     }
-    
-    getDataValue(face: CubeFace, lod: number, tileX: number, tileY: number, pixelX: number, pixelY: number) {
+
+    getDataValue(
+        face: CubeFace,
+        lod: number,
+        tileX: number,
+        tileY: number,
+        pixelX: number,
+        pixelY: number
+    ) {
         const xTiles = this.context.interaction.cubeDimensions.xTilesForFace(face, lod);
         const tileIndex = tileX + tileY * xTiles;
         const indexOffset = tileIndex * TILE_SIZE * TILE_SIZE;
         if (!this.tileStoragesFloat[face][lod] || this.tileStoragesFloat[face][lod].length == 0) {
-            return { 
-                value: NaN, 
-                isDataNan: false, 
+            return {
+                value: NaN,
+                isDataNan: false,
                 isDataNotLoaded: true
-            }
+            };
         }
         const value = this.tileStoragesFloat[face][lod][indexOffset + pixelX + pixelY * TILE_SIZE];
-        return { 
-            value: (value == NAN_REPLACEMENT_VALUE || value == NOT_LOADED_REPLACEMENT_VALUE) ? NaN : value, 
-            isDataNan: value == NAN_REPLACEMENT_VALUE, 
-            isDataNotLoaded: value == NOT_LOADED_REPLACEMENT_VALUE 
-        }
+        return {
+            value:
+                value == NAN_REPLACEMENT_VALUE || value == NOT_LOADED_REPLACEMENT_VALUE
+                    ? NaN
+                    : value,
+            isDataNan: value == NAN_REPLACEMENT_VALUE,
+            isDataNotLoaded: value == NOT_LOADED_REPLACEMENT_VALUE
+        };
     }
 
     addTileDownloadsTriggered(value: number = 1) {
@@ -706,7 +894,7 @@ class TileData {
     }
 
     isTileDownloadTriggered(tile: Tile) {
-        const key = tile.getHashKey()
+        const key = tile.getHashKey();
         if (this.tilesDownloadTriggered[tile.face].get(key)) {
             return true;
         }
@@ -718,6 +906,47 @@ class TileData {
         this.tilesDownloadTriggered[face].clear();
         this.tilesDownloadFinished[face].clear();
     }
+
+    clearTileDownloadState(tiles: Tile[]) {
+        for (const tile of tiles) {
+            const key = tile.getHashKey();
+            if (this.tilesDownloadTriggered[tile.face].get(key)) {
+                this.tilesDownloadTriggered[tile.face].delete(key);
+                this.addTileDownloadsTriggered(-1);
+            }
+            if (this.tilesDownloadFinished[tile.face].get(key)) {
+                this.tilesDownloadFinished[tile.face].delete(key);
+                this.addTileDownloadsFinished(-1);
+            }
+        }
+    }
+
+    clearTilesForDownload(tiles: Tile[]) {
+        if (tiles.length === 0) {
+            return;
+        }
+        const updatedTextures = new Set<string>();
+        for (const tile of tiles) {
+            this.allocateTexture(tile.face, tile.lod);
+            const xTiles = this.context.interaction.cubeDimensions.xTilesForFace(
+                tile.face,
+                tile.lod
+            );
+            const tileIndex = tile.x + tile.y * xTiles;
+            const startIndex = tileIndex * TILE_SIZE * TILE_SIZE;
+            const endIndex = (tileIndex + 1) * TILE_SIZE * TILE_SIZE;
+            const storage = this.tileStoragesFloat[tile.face][tile.lod];
+            storage.fill(NOT_LOADED_REPLACEMENT_VALUE, startIndex, endIndex);
+            updatedTextures.add(`${tile.face}-${tile.lod}`);
+        }
+        for (const key of updatedTextures.values()) {
+            const [faceValue, lodValue] = key.split('-').map((value) => Number(value));
+            this.context.rendering.cube.material[faceValue].uniforms[
+                `tilesLod${lodValue}`
+                ].value.needsUpdate = true;
+        }
+        this.context.rendering.requestRender();
+    }
 }
 
-export { TileData, Tile }
+export { TileData, Tile };
