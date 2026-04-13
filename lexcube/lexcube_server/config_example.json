@@ -16,7 +16,7 @@
             "hidden": false,
             "flippedY": false,
             "useOfflineMetadata": false,
-            "enableCaching": true,
+            "enabledCachingStrategies": ["tile", "block"],
             "maxCacheGb": 1,
             "notes": {"source": {"url": "n/a"}}
         },
@@ -24,8 +24,12 @@
             "id": "esdc-3.0.2-low-res",
             "shortName": "ESDC 3.0.2 (Low Res)",
             "datasetPath": "esdc-16d-2.5deg-46x72x144-3.0.2.zarr",
-            "notes": {"source": {"url": "https://data.rsc4earth.de/download/EarthSystemDataCube/v3.0.2/esdc-16d-2.5deg-46x72x144-3.0.2.zarr/"}},
-            "enableCaching": true,
+            "notes": {
+                "source": {
+                    "url": "https://data.rsc4earth.de/download/EarthSystemDataCube/v3.0.2/esdc-16d-2.5deg-46x72x144-3.0.2.zarr/"
+                }
+            },
+            "enabledCachingStrategies": ["tile", "block"],
             "maxCacheGb": 1
         }
     ]

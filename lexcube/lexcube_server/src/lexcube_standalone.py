@@ -11,6 +11,10 @@ config.json is read from the current working directory. Copy and edit
 lexcube/lexcube_server/config_example.json to get started.
 """
 
+import os
+import signal
+import threading
+import time
 import urllib.request
 from pathlib import Path
 
@@ -28,8 +32,8 @@ GEOJSON_DIR = Path(__file__).parent / "geojson"
 GEOJSON_DIR.mkdir(exist_ok=True)  # must exist before StaticFiles mount below
 GEOJSON_FILES = {
     "ne_110m_admin_0_countries.geojson": "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_110m_admin_0_countries.geojson",
-    "ne_50m_admin_0_countries.geojson":  "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_50m_admin_0_countries.geojson",
-    "ne_10m_admin_0_countries.geojson":  "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_10m_admin_0_countries.geojson",
+    "ne_50m_admin_0_countries.geojson": "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_50m_admin_0_countries.geojson",
+    "ne_10m_admin_0_countries.geojson": "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_10m_admin_0_countries.geojson",
 }
 
 
@@ -75,7 +79,10 @@ async def api_dataset(dataset_id: str):
 
 @sio.on("request_tile_data")
 async def handle_request_tile_data(sid, data):
-    await tile_server.handle_tile_request_standalone(sio, sid, data)
+    try:
+        await tile_server.handle_tile_request_standalone(sio, sid, data)
+    except Exception as e:
+        print(f"Unhandled error in request_tile_data: {e}", flush=True)
 
 
 @sio.on("cancel_tile_requests")
@@ -93,4 +100,25 @@ socket_app = socketio.ASGIApp(sio, other_asgi_app=app, socketio_path='ws/socket.
 if __name__ == "__main__":
     download_geojson_files()
     tile_server.startup_standalone()
-    uvicorn.run(socket_app, host="0.0.0.0", port=5000)
+    config = uvicorn.Config(socket_app, host="0.0.0.0", port=5000, log_level="info")
+    server = uvicorn.Server(config)
+    server.install_signal_handlers = False
+
+
+    def handle_shutdown(signum, frame):
+        print("Shutdown requested, stopping server...", flush=True)
+        tile_server.shutdown()
+        server.should_exit = True
+        os._exit(0)
+
+
+    signal.signal(signal.SIGINT, handle_shutdown)
+    signal.signal(signal.SIGTERM, handle_shutdown)
+    if hasattr(signal, "SIGBREAK"):
+        signal.signal(signal.SIGBREAK, handle_shutdown)
+
+    server_thread = threading.Thread(target=server.run, daemon=True)
+    server_thread.start()
+
+    while True:
+        time.sleep(1)

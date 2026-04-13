@@ -1,16 +1,16 @@
 # Lexcube - Interactive 3D Data Cube Visualization
 # Copyright (C) 2022 Maximilian Söchting <maximilian.soechting@uni-leipzig.de>
-# 
+#
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
 # the Free Software Foundation; either version 3 of the License, or
 # (at your option) any later version.
-# 
+#
 # This program is distributed in the hope that it will be useful,
 # but WITHOUT ANY WARRANTY; without even the implied warranty of
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 # GNU General Public License for more details.
-# 
+#
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
@@ -54,8 +54,10 @@ NAN_TILE_MAGIC_NUMBER = -1
 LOSSLESS_TILE_MAGIC_NUMBER = -2
 API_VERSION = 5
 TILE_VERSION = 2
+CACHE_STRATEGIES = {"tile", "block"}
 
-TILE_FORMAT_MAGIC_BYTES = "lexc".encode("utf-8") # 6c 65 78 63, magic bytes to recognize lexcube tiles
+TILE_FORMAT_MAGIC_BYTES = "lexc".encode("utf-8")  # 6c 65 78 63, magic bytes to recognize lexcube tiles
+
 
 class DataSourceProxy:
     def __init__(self, data_source: Union[xr.DataArray, np.ndarray]) -> None:
@@ -73,19 +75,24 @@ class DataSourceProxy:
 
     def find_affected_chunks(self, x: slice, y: slice, z: slice):
         x_chunk_start = np.searchsorted(self.x_chunk_indices, x.start, side="right") - 1
-        x_chunk_end = min(np.searchsorted(self.x_chunk_indices, x.stop - 1, side="right") - 1, len(self.x_chunk_indices) - 2)
+        x_chunk_end = min(np.searchsorted(self.x_chunk_indices, x.stop - 1, side="right") - 1,
+                          len(self.x_chunk_indices) - 2)
         y_chunk_start = np.searchsorted(self.y_chunk_indices, y.start, side="right") - 1
-        y_chunk_end = min(np.searchsorted(self.y_chunk_indices, y.stop - 1, side="right") - 1, len(self.y_chunk_indices) - 2)
+        y_chunk_end = min(np.searchsorted(self.y_chunk_indices, y.stop - 1, side="right") - 1,
+                          len(self.y_chunk_indices) - 2)
         z_chunk_start = np.searchsorted(self.z_chunk_indices, z.start, side="right") - 1
-        z_chunk_end = min(np.searchsorted(self.z_chunk_indices, z.stop - 1, side="right") - 1, len(self.z_chunk_indices) - 2)
-        return [(z, y, x) for z in range(z_chunk_start, z_chunk_end + 1) for y in range(y_chunk_start, y_chunk_end + 1) for x in range(x_chunk_start, x_chunk_end + 1)]
+        z_chunk_end = min(np.searchsorted(self.z_chunk_indices, z.stop - 1, side="right") - 1,
+                          len(self.z_chunk_indices) - 2)
+        return [(z, y, x) for z in range(z_chunk_start, z_chunk_end + 1) for y in range(y_chunk_start, y_chunk_end + 1)
+                for x in range(x_chunk_start, x_chunk_end + 1)]
 
     def get_chunk_slices(self, chunk_ix: int, chunk_iy: int, chunk_iz: int):
         return (slice(self.z_chunk_indices[chunk_iz], self.z_chunk_indices[chunk_iz + 1]),
                 slice(self.y_chunk_indices[chunk_iy], self.y_chunk_indices[chunk_iy + 1]),
                 slice(self.x_chunk_indices[chunk_ix], self.x_chunk_indices[chunk_ix + 1]))
 
-    def get_chunk_slices_for_request(self, chunk_ix: int, chunk_iy: int, chunk_iz: int, x_request_slice: slice, y_request_slice: slice, z_request_slice: slice):
+    def get_chunk_slices_for_request(self, chunk_ix: int, chunk_iy: int, chunk_iz: int, x_request_slice: slice,
+                                     y_request_slice: slice, z_request_slice: slice):
         chunk_slices = self.get_chunk_slices(chunk_ix, chunk_iy, chunk_iz)
         lower_x = max(x_request_slice.start - chunk_slices[2].start, 0)
         upper_x = min(x_request_slice.stop - chunk_slices[2].start, chunk_slices[2].stop - chunk_slices[2].start)
@@ -101,7 +108,9 @@ class DataSourceProxy:
         request_copy_target_slice_upper_y = request_copy_target_slice_lower_y + upper_y - lower_y
         request_copy_target_slice_lower_z = chunk_slices[0].start - z_request_slice.start + lower_z
         request_copy_target_slice_upper_z = request_copy_target_slice_lower_z + upper_z - lower_z
-        request_copy_target_slices = (slice(request_copy_target_slice_lower_z, request_copy_target_slice_upper_z), slice(request_copy_target_slice_lower_y, request_copy_target_slice_upper_y), slice(request_copy_target_slice_lower_x, request_copy_target_slice_upper_x))
+        request_copy_target_slices = (slice(request_copy_target_slice_lower_z, request_copy_target_slice_upper_z),
+                                      slice(request_copy_target_slice_lower_y, request_copy_target_slice_upper_y),
+                                      slice(request_copy_target_slice_lower_x, request_copy_target_slice_upper_x))
         return (chunk_copy_source_slices, request_copy_target_slices)
 
     def is_chunk_cached(self, iz_iy_ix: tuple[int, int, int]):
@@ -124,10 +133,14 @@ class DataSourceProxy:
             return self.data_source.__getitem__(arg)
         (z_request_slice, y_request_slice, x_request_slice) = [self.validate_slice(s, i) for i, s in enumerate(arg)]
         chunks = self.find_affected_chunks(x_request_slice, y_request_slice, z_request_slice)
-        output = np.ndarray((z_request_slice.stop - z_request_slice.start, y_request_slice.stop - y_request_slice.start, x_request_slice.stop - x_request_slice.start), dtype=self.data_source.dtype)
+        output = np.ndarray((z_request_slice.stop - z_request_slice.start, y_request_slice.stop - y_request_slice.start,
+                             x_request_slice.stop - x_request_slice.start), dtype=self.data_source.dtype)
         for (iz, iy, ix) in chunks:
             c = self.get_chunk(iz, iy, ix)
-            (chunk_copy_source_slices, request_copy_target_slices) = self.get_chunk_slices_for_request(ix, iy, iz, x_request_slice, y_request_slice, z_request_slice)
+            (chunk_copy_source_slices, request_copy_target_slices) = self.get_chunk_slices_for_request(ix, iy, iz,
+                                                                                                       x_request_slice,
+                                                                                                       y_request_slice,
+                                                                                                       z_request_slice)
             np.copyto(output[request_copy_target_slices], c[chunk_copy_source_slices])
         return output
 
@@ -135,10 +148,13 @@ class DataSourceProxy:
 # from: https://stackoverflow.com/a/2135920
 def split_list_into_equal_parts(l: list, parts: int):
     k, m = divmod(len(l), parts)
-    return ([l[i*k+min(i, m):(i+1)*k+min(i+1, m)]] for i in range(parts))
+    return ([l[i * k + min(i, m):(i + 1) * k + min(i + 1, m)]] for i in range(parts))
+
 
 def print_current_memory_usage(s: str = ""):
-    print(f"........................ [{s}] Current memory usage: {round(psutil.Process(os.getpid()).memory_info().rss / 1024 ** 2, 2)} MB")
+    print(
+        f"........................ [{s}] Current memory usage: {round(psutil.Process(os.getpid()).memory_info().rss / 1024 ** 2, 2)} MB")
+
 
 class TileCompressor:
     def __init__(self, compress_lossless: bool) -> None:
@@ -155,27 +171,27 @@ class TileCompressor:
 
     def compress_nan_mask(self, nan_mask: bytes) -> bytes:
         return self.nan_mask_compressor.encode(nan_mask)
-    
+
     def decompress_nan_mask(self, data: bytes) -> bytes:
         return self.nan_mask_compressor.decode(data)
-    
+
     def get_tile_data_compressor(self, use_lossless_override: Union[bool, None] = None):
         lossless = self.compress_lossless if use_lossless_override == None else use_lossless_override
         if lossless:
             return self.tile_data_compressor_lossless
         else:
             return self.tile_data_compressor_default
-    
+
     def compress_tile_data(self, tile_data: bytes, is_anomaly_tile: bool = False) -> bytes:
         if not self.compress_lossless:
             self.tile_data_compressor_default.tolerance = self.anomaly_compression_tolerance if is_anomaly_tile else self.default_compression_tolerance
         return self.get_tile_data_compressor().encode(tile_data)
-        
+
     def decompress_tile_data(self, tile_data: bytes, use_lossless_override: Union[bool, None] = None) -> bytes:
         return self.get_tile_data_compressor(use_lossless_override).decode(tile_data)
 
 
-class PerformanceTimer:    
+class PerformanceTimer:
     def __init__(self) -> None:
         self.time_elapsed_since_last_call = time.perf_counter_ns()
 
@@ -183,13 +199,16 @@ class PerformanceTimer:
         self.time_elapsed_since_last_call = time.perf_counter()
 
     def print_time_elapsed_since_last_call(self, s: str = ""):
-        print(f"........................ [{s}] Time elapsed since last call: {round(time.perf_counter_ns() - self.time_elapsed_since_last_call, 2)} ns")
+        print(
+            f"........................ [{s}] Time elapsed since last call: {round(time.perf_counter_ns() - self.time_elapsed_since_last_call, 2)} ns")
         self.time_elapsed_since_last_call = time.perf_counter_ns()
+
 
 class Dimension(enum.Enum):
     Z = 0
     Y = 1
     X = 2
+
 
 dimension_mapping = {
     "by_z": Dimension.Z,
@@ -197,10 +216,12 @@ dimension_mapping = {
     "by_x": Dimension.X
 }
 
+
 def interpolate_nans_1d(array):
     not_nan = np.logical_not(np.isnan(array))
     indices = np.arange(len(array))
     return np.interp(indices, indices[not_nan], array[not_nan])
+
 
 def interpolate_and_smooth_nans_1d_padded(array, kernel_size):
     not_nan = np.logical_not(np.isnan(array))
@@ -217,14 +238,16 @@ def interpolate_and_smooth_nans_1d_padded(array, kernel_size):
     result = np.concatenate((before, array, after))
     result = interpolate_nans_1d(result)
     result = apply_mean_filter(result, kernel_size)
-    return result[len(before)+kernel_radius:-len(after)+kernel_radius]
+    return result[len(before) + kernel_radius:-len(after) + kernel_radius]
+
 
 def apply_mean_filter(array, kernel_size):
     return bottleneck.move_mean(array, window=kernel_size, min_count=1)
 
+
 def interpolate_nans_and_smooth(input_list: list):
     for i, (iy, ix, time_series, sparse_doy_keys) in enumerate(input_list):
-        kernel_size = 17 # considers 4.6% of the year
+        kernel_size = 17  # considers 4.6% of the year
         t = np.full(366, np.nan)
         keys = np.fromiter(sparse_doy_keys, np.uint64) - 1
         t[keys] = time_series
@@ -232,22 +255,28 @@ def interpolate_nans_and_smooth(input_list: list):
         input_list[i] = (iy, ix, interpolated[keys])
     return input_list
 
+
 def sample_data_array_2d(data, sample_factor):
-    s = data[::sample_factor,::sample_factor]
-    return np.stack([s[i] for i in range(len(s))]) 
+    s = data[::sample_factor, ::sample_factor]
+    return np.stack([s[i] for i in range(len(s))])
+
 
 def calculate_max_lod(tile_size: int, dims: list[int]):
     desired_max_lod = math.ceil(-math.log2(tile_size / max(dims)))
     largest_lod_possible = math.floor(math.log2(min(dims)))
     return min(desired_max_lod, largest_lod_possible)
 
+
 def patch_data(data: np.ndarray, dataset_id: str, parameter: str, dataset_config: DatasetConfig = None) -> np.ndarray:
-    if dataset_id == "esdc-2.1.1-high-res" and parameter in ["sensible_heat", "terrestrial_ecosystem_respiration", "net_radiation", "net_ecosystem_exchange", "latent_energy", "gross_primary_productivity"]:
-        data = np.where(data==-9999, np.nan, data) # Replace netcdf -9999(=NaN) values
+    if dataset_id == "esdc-2.1.1-high-res" and parameter in ["sensible_heat", "terrestrial_ecosystem_respiration",
+                                                             "net_radiation", "net_ecosystem_exchange", "latent_energy",
+                                                             "gross_primary_productivity"]:
+        data = np.where(data == -9999, np.nan, data)  # Replace netcdf -9999(=NaN) values
     if parameter == "snow_water_equivalent":
-        data = np.where(data==-1, np.nan, data) # -1 = Oceans = NaN
-        data = np.where(data==-2, 0, data) # -2 = mountains or something...
+        data = np.where(data == -1, np.nan, data)  # -1 = Oceans = NaN
+        data = np.where(data == -2, 0, data)  # -2 = mountains or something...
     return data
+
 
 def patch_dataset(ds: Union[xr.DataArray, xr.Dataset, np.ndarray]):
     if type(ds) == np.ndarray:
@@ -263,6 +292,7 @@ def patch_dataset(ds: Union[xr.DataArray, xr.Dataset, np.ndarray]):
             ds = ds.sortby(dims[1], ascending=False)
     return ds
 
+
 def open_dataset(config: ServerConfig, path: str):
     aws_s3_hosted = path.startswith("s3://")
     http_hosted = path.startswith("http://") or path.startswith("https://")
@@ -273,35 +303,59 @@ def open_dataset(config: ServerConfig, path: str):
     protocol_map = {
         "s3": fsspec.get_mapper(path, anon=True)
     }
-    store = (protocol_map.get(protocol) or fsspec.get_mapper(path)) if remote_hosted else os.path.join(config.base_dir, path)
+    store = (protocol_map.get(protocol) or fsspec.get_mapper(path)) if remote_hosted else os.path.join(config.base_dir,
+                                                                                                       path)
     engines = {
         "zarr": "zarr",
         "nc": "netcdf4"
     }
     ds = xr.open_dataset(store, engine=engines[file_extension])
     ds = patch_dataset(ds)
-    return ds 
+    return ds
+
 
 class DatasetConfig:
     def __init__(self, dataset_config: dict) -> None:
         self.id = str(dataset_config["id"])
         self.short_name = str(dataset_config["shortName"])
         self.dataset_path = str(dataset_config["datasetPath"])
+        self.is_remote_hosted = self.dataset_path.startswith("s3://") or self.dataset_path.startswith(
+            "http://") or self.dataset_path.startswith("https://")
         self.ignored_parameters: list[str] = list(dataset_config.get("ignoredParameters") or [])
         self.only_parameters: list[str] = list(dataset_config.get("onlyParameters") or [])
-        self.pre_generation_sparsity = int(dataset_config.get("preGenerationSparsity") or DEFAULT_PRE_GENERATION_SPARSITY) 
+        self.pre_generation_sparsity = int(
+            dataset_config.get("preGenerationSparsity") or DEFAULT_PRE_GENERATION_SPARSITY)
         self.calculate_anomalies = bool(dataset_config.get("calculateYearlyAnomalies") or False)
         self.force_tile_generation = bool(dataset_config.get("forceTileGeneration") or False)
         self.max_lod = int(dataset_config.get("overrideMaxLod") or -1)
         self.use_offline_metadata = bool(dataset_config.get("useOfflineMetadata") or False)
         self.min_max_values_approximate_only = bool(dataset_config.get("approximateMinMaxValues") or True)
-        self.enable_caching = bool(dataset_config.get("enableCaching", False))
+        enabled_caching_strategies = dataset_config.get("enabledCachingStrategies")
+        if not enabled_caching_strategies:
+            self.enabled_caching_strategies = []
+        elif isinstance(enabled_caching_strategies, str):
+            self.enabled_caching_strategies = [enabled_caching_strategies]
+        else:
+            self.enabled_caching_strategies = list(enabled_caching_strategies)
+        self.enabled_caching_strategies = [s.strip().lower() for s in self.enabled_caching_strategies if s]
+        invalid_strategies = [s for s in self.enabled_caching_strategies if s not in CACHE_STRATEGIES]
+        if invalid_strategies:
+            raise ValueError(
+                f"Dataset '{self.id}': invalid enabledCachingStrategies values: {invalid_strategies}. Use any of {sorted(CACHE_STRATEGIES)}.")
         self.max_cache_gb = float(dataset_config.get("maxCacheGb", 0))
-        if self.enable_caching and self.max_cache_gb <= 0:
-            raise ValueError(f"Dataset '{self.id}': enableCaching is true but maxCacheGb is not set or is 0. Set maxCacheGb to a positive value.")
+        if self.caching_enabled() and self.max_cache_gb <= 0:
+            raise ValueError(
+                f"Dataset '{self.id}': enabledCachingStrategies is set but maxCacheGb is not set or is 0. Set maxCacheGb to a positive value.")
 
-LONGITUDE_DIMENSION_NAMES = ["longitude","lon"]
-LATITUDE_DIMENSION_NAMES = ["latitude","lat"]
+    def caching_enabled(self) -> bool:
+        return len(self.enabled_caching_strategies) > 0
+
+    def caching_strategy_enabled(self, strategy: str) -> bool:
+        return strategy in self.enabled_caching_strategies
+
+
+LONGITUDE_DIMENSION_NAMES = ["longitude", "lon"]
+LATITUDE_DIMENSION_NAMES = ["latitude", "lat"]
 TIME_DIMENSION_NAMES = ["time"]
 
 
@@ -314,12 +368,14 @@ def get_dimension_type(dimension_name: str):
         return "time"
     return "generic"
 
+
 def get_dimension_labels(data_array: xr.DataArray, dimension_name: str, dimension_type: str = ""):
     dtype = get_dimension_type(dimension_name) if dimension_type == "" else dimension_type
 
     if dtype == "time":
         if data_array[dimension_name].dtype == cftime.datetime:
-            return np.datetime_as_string([np.datetime64(str(d)) for d in data_array[dimension_name].values], timezone="UTC").tolist()
+            return np.datetime_as_string([np.datetime64(str(d)) for d in data_array[dimension_name].values],
+                                         timezone="UTC").tolist()
         else:
             try:
                 return np.datetime_as_string(data_array[dimension_name].values, timezone="UTC").tolist()
@@ -327,6 +383,7 @@ def get_dimension_labels(data_array: xr.DataArray, dimension_name: str, dimensio
                 return data_array[dimension_name].values.tolist()
 
     return data_array[dimension_name].values.tolist()
+
 
 class DatasetMetadata:
     def __init__(self) -> None:
@@ -347,7 +404,7 @@ class DatasetMetadata:
             self.y_dimension_name = data["y_dimension_name"]
             self.z_dimension_name = data["z_dimension_name"]
             self.dataset_dict = data["dataset_dict"]
-        
+
     def save_to_file(self, file_path):
         os.makedirs(os.path.dirname(file_path), exist_ok=True)
         with open(file_path, 'w') as f:
@@ -372,10 +429,9 @@ class DatasetMetadata:
                 return dim
         return ""
 
-
     def load_from_dataset(self, dataset: Dataset, data: xr.Dataset):
         self.dataset_dict = data.to_dict(data=False)
-        
+
         dims = list(data[dataset.get_real_and_virtual_parameters()[0]].dims)
         self.x_dimension_name = dims[2]
         self.x_dimension_type = get_dimension_type(self.x_dimension_name)
@@ -387,20 +443,22 @@ class DatasetMetadata:
         self.x_max = data.dims.get(self.x_dimension_name)
         self.y_max = data.dims.get(self.y_dimension_name)
         self.z_max = data.dims.get(self.z_dimension_name)
-        
+
         self.axis_labels = {
             "x": get_dimension_labels(data, self.x_dimension_name, self.x_dimension_type),
             "y": get_dimension_labels(data, self.y_dimension_name, self.y_dimension_type),
             "z": get_dimension_labels(data, self.z_dimension_name, self.z_dimension_type)
         }
 
+
 class ParameterMetadataParser:
-    def __init__(self, config: ServerConfig, min_max_values_approximate_only: bool, dataset_path: str, dataset_id: str) -> None:
+    def __init__(self, config: ServerConfig, min_max_values_approximate_only: bool, dataset_path: str,
+                 dataset_id: str) -> None:
         self.min_max_values_approximate_only = min_max_values_approximate_only
         self.config = config
         self.dataset_path = dataset_path
-        self.dataset_id = dataset_id        
-        
+        self.dataset_id = dataset_id
+
     def discover_metadata_for_parameter(self, existing_metadata: ParameterMetadata, parameter: str):
         print(f"** parameter {parameter}")
         first, last, minimum_value, maximum_value, median_of_1quantiles, median_of_99quantiles, resample_resolution = None, None, None, None, None, None, None
@@ -417,32 +475,41 @@ class ParameterMetadataParser:
         if first == None or last == None:
             (first, last) = self.find_first_and_last_slices(parameter_data)
             print(f" - Detected first/last: {first} - {last}")
-        if (minimum_value == None or maximum_value == None or median_of_1quantiles == None or median_of_99quantiles == None) or (min_max_approximate_only and not self.min_max_values_approximate_only):
-            (minimum_value, maximum_value, median_of_1quantiles, median_of_99quantiles) = self.find_min_max_and_quantiles(parameter_data, self.dataset_id, parameter, first, last, self.min_max_values_approximate_only)
+        if (
+            minimum_value == None or maximum_value == None or median_of_1quantiles == None or median_of_99quantiles == None) or (
+            min_max_approximate_only and not self.min_max_values_approximate_only):
+            (minimum_value, maximum_value, median_of_1quantiles,
+             median_of_99quantiles) = self.find_min_max_and_quantiles(parameter_data, self.dataset_id, parameter, first,
+                                                                      last, self.min_max_values_approximate_only)
             min_max_approximate_only = self.min_max_values_approximate_only
-            print(f" - Detected min/max: {minimum_value} - {maximum_value} Median 1%: {median_of_1quantiles} Median 99%: {median_of_99quantiles}")
+            print(
+                f" - Detected min/max: {minimum_value} - {maximum_value} Median 1%: {median_of_1quantiles} Median 99%: {median_of_99quantiles}")
         if resample_resolution == None:
             resample_resolution = self.detect_resample_resolution(parameter_data, self.dataset_id, parameter, first)
             print(f" - Detected resolution {resample_resolution}")
         # parameter_data = None
         # gc.collect()
-        return ParameterMetadata(parameter, int(first), int(last), minimum_value, maximum_value, median_of_1quantiles, median_of_99quantiles, int(resample_resolution), min_max_approximate_only)
+        return ParameterMetadata(parameter, int(first), int(last), minimum_value, maximum_value, median_of_1quantiles,
+                                 median_of_99quantiles, int(resample_resolution), min_max_approximate_only)
 
     def test_resample_resolution(self, data: np.ndarray, blocksize: int):
         all_global = True
-        scaled = cv2.resize(data, None, fx=1.0/blocksize, fy=1.0/blocksize, interpolation=cv2.INTER_LINEAR)
+        scaled = cv2.resize(data, None, fx=1.0 / blocksize, fy=1.0 / blocksize, interpolation=cv2.INTER_LINEAR)
         for iy, ix in np.ndindex(scaled.shape):
             new = scaled[iy, ix]
-            old = data[iy*blocksize, ix*blocksize]
+            old = data[iy * blocksize, ix * blocksize]
             all_local = new == old or (math.isnan(new) and math.isnan(old))
             if not all_local:
                 all_global = False
                 break
         return all_global
 
-    def detect_resample_resolution(self, parameter_data: xr.DataArray, dataset_id: str, parameter: str, sample_time_slice: int):
+    def detect_resample_resolution(self, parameter_data: xr.DataArray, dataset_id: str, parameter: str,
+                                   sample_time_slice: int):
         print("Detect resample resolution", end="", flush=True)
-        if dataset_id == "esdc-2.1.1-high-res" and parameter in ["air_temperature_2m","max_air_temperature_2m","min_air_temperature_2m","precipitation_era5","radiation_era5"]:
+        if dataset_id == "esdc-2.1.1-high-res" and parameter in ["air_temperature_2m", "max_air_temperature_2m",
+                                                                 "min_air_temperature_2m", "precipitation_era5",
+                                                                 "radiation_era5"]:
             return 3
         slice = parameter_data[sample_time_slice].values
         for blocksize in range(32, 1, -1):
@@ -450,16 +517,19 @@ class ParameterMetadataParser:
                 return blocksize
         return 1
 
-    def find_min_max_and_quantiles(self, parameter_data: xr.DataArray, dataset_id: str, parameter: str, first_time_slice: int, last_time_slice: int, approximate_only: bool = False):
+    def find_min_max_and_quantiles(self, parameter_data: xr.DataArray, dataset_id: str, parameter: str,
+                                   first_time_slice: int, last_time_slice: int, approximate_only: bool = False):
         step = max(1, math.floor((last_time_slice - first_time_slice + 1) / 150.0)) if approximate_only else 1
-        minimum_value = np.Infinity
-        maximum_value = -np.Infinity
+        minimum_value = np.inf
+        maximum_value = -np.inf
         observations = 0
         local_1quantiles = []
         local_99quantiles = []
-        
+
         total_steps = len(range(first_time_slice, last_time_slice, step))
-        print(f"Find min, max and quantile values {'[approximate only]' if approximate_only else ''} ({total_steps} samples) - ", end="", flush=True)
+        print(
+            f"Find min, max and quantile values {'[approximate only]' if approximate_only else ''} ({total_steps} samples) - ",
+            end="", flush=True)
         for t in range(first_time_slice, last_time_slice, step):
             observations += 1
             print(f"{observations}/{total_steps}", end="\r", flush=True)
@@ -481,8 +551,10 @@ class ParameterMetadataParser:
         median_of_99quantiles = np.nanmedian(local_99quantiles)
 
         # if any of the values are NaN, write error to print
-        if np.isnan(minimum_value) or np.isnan(maximum_value) or np.isnan(median_of_1quantiles) or np.isnan(median_of_99quantiles):
-            print(f"Warning: NaN values detected in min/max/quantile calculations for {parameter} - {minimum_value} - {maximum_value} - {median_of_1quantiles} - {median_of_99quantiles}, setting to min/max to 0 if nan and medians to min/max if nan.")
+        if np.isnan(minimum_value) or np.isnan(maximum_value) or np.isnan(median_of_1quantiles) or np.isnan(
+            median_of_99quantiles):
+            print(
+                f"Warning: NaN values detected in min/max/quantile calculations for {parameter} - {minimum_value} - {maximum_value} - {median_of_1quantiles} - {median_of_99quantiles}, setting to min/max to 0 if nan and medians to min/max if nan.")
             if np.isnan(minimum_value):
                 minimum_value = 0
             if np.isnan(maximum_value):
@@ -552,21 +624,23 @@ class ParameterMetadataParser:
             if not np.all(np.isnan(parameter_data[time].values)):
                 last_found = time
                 # print(f"2nd loop - found something at {time}")
-                break        
-        # naive = first_found + (time_max - last_found - 1)
+                break
+                # naive = first_found + (time_max - last_found - 1)
         # print(f"First: {first_found} Last: {last_found} Accesses: {accesses} (naive: {naive}, {format((accesses * 100.0 / (naive + 0.01)), '.2f')}%)")
         return (first_found, last_found)
+
 
 class Dataset:
     def __init__(self, server_config: ServerConfig, dataset_config: dict, base_dir: str, tile_size: int) -> None:
         self.dataset_config = DatasetConfig(dataset_config)
         self.id = self.dataset_config.id
         self.short_name = self.dataset_config.short_name
+        self.is_remote_hosted = self.dataset_config.is_remote_hosted
         self.base_dir = base_dir
         self.data: xr.Dataset = None
         self.calculate_anomalies: bool = self.dataset_config.calculate_anomalies
         self.force_tile_generation: bool = self.dataset_config.force_tile_generation
-        self.enable_caching: bool = self.dataset_config.enable_caching
+        self.enabled_caching_strategies: list[str] = self.dataset_config.enabled_caching_strategies
         self.max_cache_gb: float = self.dataset_config.max_cache_gb
         self.all_valid_parameters: list[str] = []
         self.real_parameters: list[str] = []
@@ -585,6 +659,12 @@ class Dataset:
         self.tile_size = tile_size
         self.use_offline_metadata = self.dataset_config.use_offline_metadata
         self.meta_data = DatasetMetadata()
+
+    def caching_enabled(self) -> bool:
+        return len(self.enabled_caching_strategies) > 0
+
+    def caching_strategy_enabled(self, strategy: str) -> bool:
+        return strategy in self.enabled_caching_strategies
 
     def get_dimension_name(self, dimension: Dimension) -> str:
         if dimension == Dimension.X:
@@ -608,7 +688,7 @@ class Dataset:
         return json.dumps(self.get_minimal_representation())
 
     def get_minimal_representation(self):
-        return { "id": self.id, "shortName": self.short_name }
+        return {"id": self.id, "shortName": self.short_name}
 
     def get_detailed_representation(self):
         result = self.meta_data.dataset_dict
@@ -627,7 +707,8 @@ class Dataset:
                 del new["maximum_value"]
                 data_vars[d + ANOMALY_PARAMETER_ID_SUFFIX] = new
         result["data_vars"] = data_vars
-        result["dims_ordered"] = [self.meta_data.z_dimension_name, self.meta_data.y_dimension_name, self.meta_data.x_dimension_name]
+        result["dims_ordered"] = [self.meta_data.z_dimension_name, self.meta_data.y_dimension_name,
+                                  self.meta_data.x_dimension_name]
         result["indices"] = self.meta_data.axis_labels
         result["max_lod"] = self.max_lod
         result["sparsity"] = self.pre_generation_sparsity
@@ -640,9 +721,10 @@ class Dataset:
             valid_parameters = [p for p in all_parameters if p in self.parameter_allow_list]
         else:
             valid_parameters = [p for p in all_parameters if p not in self.parameter_block_list]
-        valid_parameters = [p for p in valid_parameters if len(self.meta_data.dataset_dict["data_vars"][p]["shape"]) == 3]
+        valid_parameters = [p for p in valid_parameters if
+                            len(self.meta_data.dataset_dict["data_vars"][p]["shape"]) == 3]
         # if len(valid_parameters) != len(all_parameters):
-        #     print(f"Skipping parameters: [{', '.join([p for p in all_parameters if p not in valid_parameters])}]")  
+        #     print(f"Skipping parameters: [{', '.join([p for p in all_parameters if p not in valid_parameters])}]")
         if self.calculate_anomalies:
             virtual_parameters.extend([p + ANOMALY_PARAMETER_ID_SUFFIX for p in valid_parameters])
         return (valid_parameters, virtual_parameters)
@@ -652,12 +734,14 @@ class Dataset:
             self.data = open_dataset(self.server_config, self.dataset_config.dataset_path)
         self.load_metadata(tile_directory)
         self.real_parameters, self.virtual_parameters = self.get_real_and_virtual_parameters()
-        print(f"        > Real parameters: [{', '.join([p for p in self.real_parameters])}]")  
-        print(f"        > Virtual parameters: [{', '.join([p for p in self.virtual_parameters])}]")  
+        print(f"        > Real parameters: [{', '.join([p for p in self.real_parameters])}]")
+        print(f"        > Virtual parameters: [{', '.join([p for p in self.virtual_parameters])}]")
         self.all_valid_parameters = self.real_parameters + self.virtual_parameters
-        if self.max_lod == -1: # i.e. max lod was not set in config
-            desired_max_lod = math.ceil(-math.log2(self.tile_size / max([self.meta_data.z_max, self.meta_data.y_max, self.meta_data.x_max])))
-            largest_lod_possible = math.floor(math.log2(min([self.meta_data.z_max, self.meta_data.y_max, self.meta_data.x_max])))
+        if self.max_lod == -1:  # i.e. max lod was not set in config
+            desired_max_lod = math.ceil(
+                -math.log2(self.tile_size / max([self.meta_data.z_max, self.meta_data.y_max, self.meta_data.x_max])))
+            largest_lod_possible = math.floor(
+                math.log2(min([self.meta_data.z_max, self.meta_data.y_max, self.meta_data.x_max])))
             self.max_lod = min(desired_max_lod, largest_lod_possible)
 
     def generate_block_indices(self, tile_server):
@@ -675,6 +759,7 @@ class Dataset:
                 y_tiles = math.ceil(adjusted_height / tile_server.TILE_SIZE)
                 content_info.append((x_tiles, y_tiles))
             self.block_contents.append(content_info)
+
 
 class ServerConfig:
     def __init__(self, tile_size) -> None:
@@ -702,7 +787,8 @@ class ServerConfig:
                     for source_dataset in source_datasets:
                         for dataset_key in source_dataset:
                             if dataset_key in dataset_level_key_migrations:
-                                target_config[top_level_key][source_datasets.index(source_dataset)][dataset_level_key_migrations[dataset_key]] = source_dataset[dataset_key]
+                                target_config[top_level_key][source_datasets.index(source_dataset)][
+                                    dataset_level_key_migrations[dataset_key]] = source_dataset[dataset_key]
                                 del target_config[top_level_key][source_datasets.index(source_dataset)][dataset_key]
                                 changed = True
                 if top_level_key in top_level_key_migrations:
@@ -728,6 +814,7 @@ class ServerConfig:
                     continue
                 self.datasets[dataset_config["id"]] = Dataset(self, dataset_config, self.base_dir, self.tile_size)
 
+
 class TileDiskStorage:
     def __init__(self, directory: str, tile_size: int, datasets: dict[str, Dataset]) -> None:
         self.directory = directory
@@ -748,33 +835,58 @@ class TileDiskStorage:
                 if old_name == new_name or not old_name in existing_names:
                     continue
                 if first:
-                    print(f"{dataset.id} -- Migrating old lon/lat/time dimension folders to new names (matching their actual dimension names)")
+                    print(
+                        f"{dataset.id} -- Migrating old lon/lat/time dimension folders to new names (matching their actual dimension names)")
                     first = False
                 source = os.path.join(self.directory, dataset.id, param, old_name)
                 destination = os.path.join(self.directory, dataset.id, param, new_name)
                 shutil.move(source, destination)
 
     def get_block_path(self, dataset: Dataset, parameter: str, index_dimension: Dimension, indexValue: int):
-        return os.path.join(self.directory, dataset.id, parameter, str(self.tile_size), dataset.get_dimension_name(index_dimension), f"{indexValue}")
+        return os.path.join(self.directory, dataset.id, parameter, str(self.tile_size),
+                            dataset.get_dimension_name(index_dimension), f"{indexValue}")
 
     def get_tile_path(self, tile: Tile):
-        return os.path.join(self.directory, tile.dataset_id, tile.parameter, str(self.tile_size), self.datasets[tile.dataset_id].get_dimension_name(tile.index_dimension), f"{tile.index_value}.{tile.lod}.{tile.x}.{tile.y}")
-    
+        return os.path.join(self.directory, tile.dataset_id, tile.parameter, str(self.tile_size),
+                            self.datasets[tile.dataset_id].get_dimension_name(tile.index_dimension),
+                            f"{tile.index_value}.{tile.lod}.{tile.x}.{tile.y}")
+
+
+class TileDiskCache:
+    def __init__(self, tile_disk_storage: TileDiskStorage) -> None:
+        self.tile_disk_storage = tile_disk_storage
+
+    def tile_exists(self, tile: Tile) -> bool:
+        return tile.exists_as_intermediate_single_file(self.tile_disk_storage.get_tile_path(tile))
+
+    def read_tile(self, tile: Tile) -> bytes:
+        return tile.read_from_intermediate_single_file(self.tile_disk_storage.get_tile_path(tile))
+
+    def write_tile(self, tile: Tile, data: bytes) -> None:
+        path = self.tile_disk_storage.get_tile_path(tile)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        tile.write_to_intermediate_single_file(path, data)
+
+
 class TileMemoryCache:
     def __init__(self) -> None:
         self.cache = {}
 
     def tile_exists(self, tile: Tile):
         return tile.get_hash_key() in self.cache
-    
+
     def put_data(self, tile: Tile, data):
         self.cache[tile.get_hash_key()] = data
 
     def get_data(self, tile: Tile):
         return self.cache[tile.get_hash_key()]
 
+
 class ParameterMetadata:
-    def __init__(self, name: str, first_valid_time_slice: int = None, last_valid_time_slice: int = None, minimum_value: float = None, maximum_value: float = None, median_of_1quantiles: float = None, median_of_99quantiles: float = None, resample_resolution: int = None, min_max_values_approximate_only: bool = False) -> None:
+    def __init__(self, name: str, first_valid_time_slice: int = None, last_valid_time_slice: int = None,
+                 minimum_value: float = None, maximum_value: float = None, median_of_1quantiles: float = None,
+                 median_of_99quantiles: float = None, resample_resolution: int = None,
+                 min_max_values_approximate_only: bool = False) -> None:
         self.name = name
         self.first_valid_time_slice = first_valid_time_slice
         self.last_valid_time_slice = last_valid_time_slice
@@ -805,9 +917,11 @@ class ParameterMetadata:
             d[property] = value
         return d
 
+
 class Tile:
     @staticmethod
-    def get_tiles_in_range(tile_size: int, dataset: Dataset, parameter: str, index_dimension: Dimension, index_values: Iterable, lods: Iterable) -> List[Tile]:
+    def get_tiles_in_range(tile_size: int, dataset: Dataset, parameter: str, index_dimension: Dimension,
+                           index_values: Iterable, lods: Iterable) -> List[Tile]:
         width = dataset.x_max if index_dimension == Dimension.Z or index_dimension == Dimension.Y else dataset.y_max
         height = dataset.y_max if index_dimension == Dimension.Z else dataset.z_max
 
@@ -824,7 +938,8 @@ class Tile:
                         tiles.append(Tile(tile_size, dataset.id, parameter, index_dimension, index_value, lod, x, y))
         return tiles
 
-    def __init__(self, tile_size: int, dataset_id: str, parameter: str, index_dimension: Dimension, index_value: int, lod: int, x: int, y: int, is_anomaly_tile: bool = False) -> None:
+    def __init__(self, tile_size: int, dataset_id: str, parameter: str, index_dimension: Dimension, index_value: int,
+                 lod: int, x: int, y: int, is_anomaly_tile: bool = False) -> None:
         self.tile_size = tile_size
         self.dataset_id = dataset_id
         self.parameter = parameter
@@ -837,10 +952,13 @@ class Tile:
         self.data = None
 
     def get_anomaly_tile(self):
-        return Tile(self.tile_size, self.dataset_id, self.parameter + ANOMALY_PARAMETER_ID_SUFFIX, self.index_dimension, self.index_value, self.lod, self.x, self.y, True)
-    
+        return Tile(self.tile_size, self.dataset_id, self.parameter + ANOMALY_PARAMETER_ID_SUFFIX, self.index_dimension,
+                    self.index_value, self.lod, self.x, self.y, True)
+
     def get_hash_key(self):
-        return "-".join([self.dataset_id, self.parameter, str(self.index_dimension.value), str(self.index_value), str(self.lod), str(self.x), str(self.y)])
+        return "-".join(
+            [self.dataset_id, self.parameter, str(self.index_dimension.value), str(self.index_value), str(self.lod),
+             str(self.x), str(self.y)])
 
     def get_data_access_slices(self, z_offset: int = 0):
         lod_factor = pow(2, self.lod)
@@ -848,12 +966,19 @@ class Tile:
         lat_tile_index = self.x if self.index_dimension == Dimension.X else self.y
 
         return (
-            slice(self.index_value - z_offset, self.index_value - z_offset + 1) if self.index_dimension == Dimension.Z else slice(lod_factor * (self.y * self.tile_size - z_offset), lod_factor * ((self.y + 1) * self.tile_size - z_offset)),
-            slice(self.index_value, self.index_value + 1) if self.index_dimension == Dimension.Y else slice(lod_tile_size * lat_tile_index, lod_tile_size * (lat_tile_index + 1)),
-            slice(self.index_value, self.index_value + 1) if self.index_dimension == Dimension.X else slice(lod_tile_size * self.x, lod_tile_size * (self.x + 1)),
+            slice(self.index_value - z_offset,
+                  self.index_value - z_offset + 1) if self.index_dimension == Dimension.Z else slice(
+                lod_factor * (self.y * self.tile_size - z_offset),
+                lod_factor * ((self.y + 1) * self.tile_size - z_offset)),
+            slice(self.index_value, self.index_value + 1) if self.index_dimension == Dimension.Y else slice(
+                lod_tile_size * lat_tile_index, lod_tile_size * (lat_tile_index + 1)),
+            slice(self.index_value, self.index_value + 1) if self.index_dimension == Dimension.X else slice(
+                lod_tile_size * self.x, lod_tile_size * (self.x + 1)),
         )
 
-    def generate_from_data(self, source_data: Union[xr.DataArray, np.ndarray, DataSourceProxy], tile_compressor: TileCompressor, z_offset: int = 0, added_compression_error: float = 0.0, resample_resolution: int = 1, compress_lossless: bool = False):
+    def generate_from_data(self, source_data: Union[xr.DataArray, np.ndarray, DataSourceProxy],
+                           tile_compressor: TileCompressor, z_offset: int = 0, added_compression_error: float = 0.0,
+                           resample_resolution: int = 1, compress_lossless: bool = False):
         lod_factor = pow(2, self.lod)
         inverse_lod_factor = 1 / lod_factor
 
@@ -874,47 +999,58 @@ class Tile:
             chunked = type(data_values) == xr.DataArray and data_values.chunks
             if chunked:
                 c = data_values.chunks
-                if (len(c[0]) > (data_values.shape[0] * inverse_lod_factor)) or (len(c[1]) > (data_values.shape[1] * inverse_lod_factor)):
+                if (len(c[0]) > (data_values.shape[0] * inverse_lod_factor)) or (
+                    len(c[1]) > (data_values.shape[1] * inverse_lod_factor)):
                     sample_instead_of_resize = True
             if sample_instead_of_resize and type(data_values) == xr.DataArray:
                 data_values = sample_data_array_2d(data_values, lod_factor)
             else:
                 v = data_values.values if type(data_values) == xr.DataArray else data_values
-                data_values = cv2.resize(v, None, fx=inverse_lod_factor, fy=inverse_lod_factor, interpolation=cv2.INTER_LINEAR)
-        
+                data_values = cv2.resize(v, None, fx=inverse_lod_factor, fy=inverse_lod_factor,
+                                         interpolation=cv2.INTER_LINEAR)
+
         adjusted_resample_resolution = max(1, resample_resolution * inverse_lod_factor)
-        if (resample_resolution * inverse_lod_factor) % 1 != 0: 
-            adjusted_resample_resolution = 1 # Resolutions that are not a whole number are not yet supported
+        if (resample_resolution * inverse_lod_factor) % 1 != 0:
+            adjusted_resample_resolution = 1  # Resolutions that are not a whole number are not yet supported
         adjusted_resample_resolution = int(adjusted_resample_resolution)
         if adjusted_resample_resolution > 1:
             # Pad the data if there is the edge case of an irregular resample at the beginning and the end of the block, for x/y respectively
-            resample_x_offset_start = adjusted_resample_resolution - ((self.x * self.tile_size) % adjusted_resample_resolution)
-            resample_y_offset_start = adjusted_resample_resolution - ((self.y * self.tile_size) % adjusted_resample_resolution)
+            resample_x_offset_start = adjusted_resample_resolution - (
+                (self.x * self.tile_size) % adjusted_resample_resolution)
+            resample_y_offset_start = adjusted_resample_resolution - (
+                (self.y * self.tile_size) % adjusted_resample_resolution)
             resample_x_offset_end = (self.tile_size - resample_x_offset_start) % adjusted_resample_resolution
             resample_y_offset_end = (self.tile_size - resample_y_offset_start) % adjusted_resample_resolution
             if resample_x_offset_start > 0 and resample_x_offset_end > 0 and resample_x_offset_start + resample_x_offset_end < adjusted_resample_resolution:
-                data_values = np.hstack((data_values, np.broadcast_to(data_values[:,-1][:,None], (data_values.shape[0], adjusted_resample_resolution - 1))))
+                data_values = np.hstack((data_values, np.broadcast_to(data_values[:, -1][:, None],
+                                                                      (data_values.shape[0],
+                                                                       adjusted_resample_resolution - 1))))
             if resample_y_offset_start > 0 and resample_y_offset_end > 0 and resample_y_offset_start + resample_y_offset_end < adjusted_resample_resolution:
-                data_values = np.vstack((data_values, np.broadcast_to(data_values[-1,:][None,:], (adjusted_resample_resolution - 1, data_values.shape[1]))))
-            data_values = data_values[::adjusted_resample_resolution,::adjusted_resample_resolution]
+                data_values = np.vstack((data_values, np.broadcast_to(data_values[-1, :][None, :],
+                                                                      (adjusted_resample_resolution - 1,
+                                                                       data_values.shape[1]))))
+            data_values = data_values[::adjusted_resample_resolution, ::adjusted_resample_resolution]
 
         return self.compress_data(data_values, tile_compressor, adjusted_resample_resolution, added_compression_error)
 
     def exists_as_intermediate_single_file(self, path: str):
         return os.path.exists(path)
 
-    def read_from_intermediate_single_file(self, path: str, suffix = ""):
-        file = open(path + suffix, "rb")
-        return file.read()
+    def read_from_intermediate_single_file(self, path: str, suffix=""):
+        with open(path + suffix, "rb") as file:
+            return file.read()
 
-    def write_to_intermediate_single_file(self, path: str, compressed_data: bytes, suffix = ""):
+    def write_to_intermediate_single_file(self, path: str, compressed_data: bytes, suffix=""):
         with open(path + suffix, "wb") as f:
             f.write(compressed_data)
 
     def get_tile_metadata_bytes(self, resample_resolution: int, nan_mask_length: int, max_error_or_magic_number: float):
-        return TILE_FORMAT_MAGIC_BYTES + struct.pack("<I", TILE_VERSION) + struct.pack("<I", resample_resolution) + struct.pack("<I", nan_mask_length) + struct.pack("<d", max_error_or_magic_number)        
-    
-    def compress_data(self, source_values: Union[xr.DataArray, np.ndarray], tile_compressor: TileCompressor, resample_resolution: int = 1, added_compression_error: float = 0.0):
+        return TILE_FORMAT_MAGIC_BYTES + struct.pack("<I", TILE_VERSION) + struct.pack("<I",
+                                                                                       resample_resolution) + struct.pack(
+            "<I", nan_mask_length) + struct.pack("<d", max_error_or_magic_number)
+
+    def compress_data(self, source_values: Union[xr.DataArray, np.ndarray], tile_compressor: TileCompressor,
+                      resample_resolution: int = 1, added_compression_error: float = 0.0):
         if np.all(np.isnan(source_values)):
             return self.get_tile_metadata_bytes(0, 0, NAN_TILE_MAGIC_NUMBER)
         # if np.any(np.isnan(source_values)):
@@ -925,11 +1061,13 @@ class Tile:
         nan_mask = np.full((self.tile_size, self.tile_size), 0, np.float32)
         nan_mask[np.isnan(tile_data)] = np.nan
 
-        statistical_data_bytes = struct.pack("<d", np.nanmin(source_values)) + struct.pack("<d", np.nanmax(source_values)) + struct.pack("<d", np.nanmean(source_values)) + struct.pack("<d", np.nanvar(source_values))
+        statistical_data_bytes = struct.pack("<d", np.nanmin(source_values)) + struct.pack("<d", np.nanmax(
+            source_values)) + struct.pack("<d", np.nanmean(source_values)) + struct.pack("<d", np.nanvar(source_values))
 
         if tile_compressor.compress_lossless:
             compressed_tile_data = tile_compressor.compress_tile_data(tile_data)
-            return self.get_tile_metadata_bytes(resample_resolution, 0, LOSSLESS_TILE_MAGIC_NUMBER) + statistical_data_bytes + compressed_tile_data
+            return self.get_tile_metadata_bytes(resample_resolution, 0,
+                                                LOSSLESS_TILE_MAGIC_NUMBER) + statistical_data_bytes + compressed_tile_data
 
         np.nan_to_num(tile_data, copy=False)
         compressed_nan_mask = tile_compressor.compress_nan_mask(nan_mask)
@@ -937,7 +1075,8 @@ class Tile:
         decompressed_tile_data = tile_compressor.decompress_tile_data(compressed_tile_data)
         errors = np.abs(decompressed_tile_data[:source_values.shape[0], :source_values.shape[1]] - source_values)
         max_error = np.nanmax(errors, initial=0) + added_compression_error
-        return self.get_tile_metadata_bytes(resample_resolution, len(compressed_nan_mask), max_error) + statistical_data_bytes + compressed_nan_mask + compressed_tile_data
+        return self.get_tile_metadata_bytes(resample_resolution, len(compressed_nan_mask),
+                                            max_error) + statistical_data_bytes + compressed_nan_mask + compressed_tile_data
 
     def decompress(self, data: bytes, tile_compressor: TileCompressor) -> tuple:
         tile_format = data[:4]
@@ -953,13 +1092,14 @@ class Tile:
         if resample_resolution != 1:
             print("Warning, non-1 resample resolution found during decompression. This case is not implemented")
         if max_compression_error_or_magic_number == LOSSLESS_TILE_MAGIC_NUMBER:
-            tile_data = np.frombuffer(tile_compressor.decompress_tile_data(data[56:], True), np.float64).reshape((self.tile_size, self.tile_size))
+            tile_data = np.frombuffer(tile_compressor.decompress_tile_data(data[56:], True), np.float64).reshape(
+                (self.tile_size, self.tile_size))
             return (tile_data, 0.0)
         nan_mask_length = struct.unpack("<I", data[12:16])[0]
-        nan_mask_compressed = data[56:56+nan_mask_length]
+        nan_mask_compressed = data[56:56 + nan_mask_length]
         nan_mask_bytes = tile_compressor.decompress_nan_mask(nan_mask_compressed)
         nan_mask = np.frombuffer(nan_mask_bytes, np.float32).reshape((self.tile_size, self.tile_size))
-        tile_data = tile_compressor.decompress_tile_data(data[56+nan_mask_length:], False) + nan_mask
+        tile_data = tile_compressor.decompress_tile_data(data[56 + nan_mask_length:], False) + nan_mask
         return (tile_data, max_compression_error_or_magic_number)
 
     def get_values_from_cache(self, generation_cache: TileGenerationCache, tile_compressor: TileCompressor) -> tuple:
@@ -968,9 +1108,10 @@ class Tile:
     def __str__(self):
         return f"{self.dataset_id} / {self.parameter} / Index: {self.index_dimension.name}, {self.index_value} / LoD: {self.lod} / XY: {self.x},{self.y}"
 
+
 class TileGenerationCache:
     def __init__(self, tile_disk_storage: TileDiskStorage, save_on_disk=False) -> None:
-        # By default, intermediate tiles are generated in memory. 
+        # By default, intermediate tiles are generated in memory.
         # If that is not feasible, they can be saved on disk instead (passing True to the "save_on_disk" argument)
         self.save_on_disk = save_on_disk
         self.tile_disk_cache = tile_disk_storage
@@ -981,7 +1122,7 @@ class TileGenerationCache:
             return tile.exists_as_intermediate_single_file(self.tile_disk_cache.get_tile_path(tile))
         else:
             return tile.get_hash_key() in self.cache
-    
+
     def put_data(self, tile: Tile, data):
         if self.save_on_disk:
             tile.write_to_intermediate_single_file(self.tile_disk_cache.get_tile_path(tile), data)
@@ -1002,15 +1143,17 @@ class TileGenerationCache:
 
     def get_uncompressed_data(self, tile: Tile):
         if self.save_on_disk:
-            return tile.read_from_intermediate_single_file(self.tile_disk_cache.get_tile_path(tile), UNCOMPRESSED_SUFFIX)
+            return tile.read_from_intermediate_single_file(self.tile_disk_cache.get_tile_path(tile),
+                                                           UNCOMPRESSED_SUFFIX)
         else:
             return self.cache[tile.get_hash_key() + UNCOMPRESSED_SUFFIX]
-        
+
     def clear(self):
         if self.save_on_disk:
             self.tile_disk_cache.clear()
         else:
             self.cache.clear()
+
 
 class ZfpCompressor:
     def __init__(self) -> None:
@@ -1026,12 +1169,14 @@ class ZfpCompressor:
         import zfpy
         return zfpy.decompress_numpy(data)
 
+
 class TileServer:
-    def __init__(self, widget_mode = False) -> None:
+    def __init__(self, widget_mode=False) -> None:
         self.compress_lossless = widget_mode
         self.TILE_SIZE = 256
         self.config = ServerConfig(self.TILE_SIZE)
         self.tile_disk_storage = None
+        self.tile_disk_cache = None
         self.datasets: dict[str, Dataset] = {}
         self.ignore_tile_cache = False
         self.forbid_runtime_tile_generation = False
@@ -1043,7 +1188,16 @@ class TileServer:
         self.request_progress_touched_chunks = {}
         self._block_generation_locks: dict[str, asyncio.Lock] = {}
         self._generation_cancel_flags: dict[str, threading.Event] = {}
-
+        self._foreground_cancel_flags: dict[int, threading.Event] = {}
+        self._foreground_requests = 0
+        self._foreground_lock = threading.Lock()
+        self._foreground_idle_event = threading.Event()
+        self._foreground_idle_event.set()
+        self._shutdown_event = threading.Event()
+        self._cache_size_lock = threading.Lock()
+        self._dataset_cache_size_bytes: dict[str, int] = {}
+        self._dataset_cache_write_counts: dict[str, int] = {}
+        self._cache_size_refresh_write_interval = 100
 
     def _get_dataset_cache_size_bytes(self, dataset: Dataset) -> int:
         dataset_dir = os.path.join(self.tile_disk_storage.directory, dataset.id)
@@ -1056,7 +1210,86 @@ class TileServer:
                     pass
         return total
 
-    def update_progress(self, request_group_id: int, request_id: int, done: int, total: int = -1, touched_chunks: set = None):
+    def _get_cached_dataset_cache_size_bytes(self, dataset: Dataset) -> int:
+        with self._cache_size_lock:
+            cached = self._dataset_cache_size_bytes.get(dataset.id)
+            if cached is not None:
+                return cached
+        cached = self._get_dataset_cache_size_bytes(dataset)
+        with self._cache_size_lock:
+            existing = self._dataset_cache_size_bytes.get(dataset.id)
+            if existing is None:
+                self._dataset_cache_size_bytes[dataset.id] = cached
+                self._dataset_cache_write_counts.setdefault(dataset.id, 0)
+                return cached
+            return existing
+
+    def _foreground_request_started(self) -> None:
+        with self._foreground_lock:
+            self._foreground_requests += 1
+            if self._foreground_requests > 0:
+                self._foreground_idle_event.clear()
+
+    def _foreground_request_finished(self) -> None:
+        with self._foreground_lock:
+            self._foreground_requests = max(0, self._foreground_requests - 1)
+            if self._foreground_requests == 0:
+                self._foreground_idle_event.set()
+
+    def _foreground_requests_active(self) -> bool:
+        with self._foreground_lock:
+            return self._foreground_requests > 0
+
+    def shutdown(self) -> None:
+        self._shutdown_event.set()
+        for flag in self._generation_cancel_flags.values():
+            flag.set()
+
+    def _can_write_cache(self, dataset: Dataset) -> bool:
+        if not dataset.caching_enabled():
+            return False
+        used_bytes = self._get_cached_dataset_cache_size_bytes(dataset)
+        if used_bytes >= dataset.max_cache_gb * 1024 ** 3:
+            print(f"  -> cache limit reached ({dataset.max_cache_gb} GB), not saving", flush=True)
+            return False
+        return True
+
+    def _maybe_write_tile_cache(self, dataset: Dataset, tile: Tile, data: bytes) -> None:
+        if self.ignore_tile_cache or not dataset.caching_strategy_enabled("tile"):
+            return
+        if not self._can_write_cache(dataset):
+            return
+        path = self.tile_disk_storage.get_tile_path(tile)
+        old_size = 0
+        try:
+            if os.path.exists(path):
+                old_size = os.path.getsize(path)
+        except OSError:
+            old_size = 0
+        self.tile_disk_cache.write_tile(tile, data)
+        new_size = len(data)
+        refresh = False
+        needs_init = False
+        with self._cache_size_lock:
+            current_size = self._dataset_cache_size_bytes.get(dataset.id)
+            if current_size is None:
+                needs_init = True
+                current_size = 0
+            self._dataset_cache_size_bytes[dataset.id] = max(0, current_size + (new_size - old_size))
+            write_count = self._dataset_cache_write_counts.get(dataset.id, 0) + 1
+            self._dataset_cache_write_counts[dataset.id] = write_count
+            refresh = write_count % self._cache_size_refresh_write_interval == 0
+        if needs_init:
+            init_size = self._get_dataset_cache_size_bytes(dataset)
+            with self._cache_size_lock:
+                self._dataset_cache_size_bytes[dataset.id] = init_size
+        if refresh:
+            refreshed_size = self._get_dataset_cache_size_bytes(dataset)
+            with self._cache_size_lock:
+                self._dataset_cache_size_bytes[dataset.id] = refreshed_size
+
+    def update_progress(self, request_group_id: int, request_id: int, done: int, total: int = -1,
+                        touched_chunks: set = None):
         if not self.request_progress.get(request_group_id):
             self.request_progress[request_group_id] = {}
 
@@ -1066,12 +1299,12 @@ class TileServer:
             total = len(self.request_progress_touched_chunks[request_group_id])
             self.widget_update_progress([done, total], True)
             return
-        
+
         if total >= 0:
-            self.request_progress[request_group_id][request_id] = [ done, total ]
+            self.request_progress[request_group_id][request_id] = [done, total]
         else:
             self.request_progress[request_group_id][request_id][0] = done
-        
+
         if self.widget_mode:
             current: dict = self.request_progress[request_group_id]
             done = sum(c[0] for c in current.values())
@@ -1080,7 +1313,8 @@ class TileServer:
 
     def startup_widget(self, data_source: Union[xr.DataArray, np.ndarray], use_lexcube_chunk_caching: bool):
         if type(data_source) == xr.DataArray and not data_source.chunks:
-            print("Xarray input object does not have chunks. You can re-open your data set with 'xr.open_dataset(..., chunks={})' to enable caching and accurate progress reporting - but may sometimes be slower for small data sets.")
+            print(
+                "Xarray input object does not have chunks. You can re-open your data set with 'xr.open_dataset(..., chunks={})' to enable caching and accurate progress reporting - but may sometimes be slower for small data sets.")
         dask_cache = Cache(2e9)  # Leverage two gigabytes of memory
         dask_cache.register()
         self.data_source = patch_dataset(data_source)
@@ -1100,7 +1334,10 @@ class TileServer:
             c.generate_block_indices(self)
         print("* Finished opening datasets")
 
-        self.tile_disk_storage = TileDiskStorage(os.path.join(self.config.tile_cache_directory, f"tile_version_{TILE_VERSION}"), self.TILE_SIZE, self.datasets)
+        self.tile_disk_storage = TileDiskStorage(
+            os.path.join(self.config.tile_cache_directory, f"tile_version_{TILE_VERSION}"), self.TILE_SIZE,
+            self.datasets)
+        self.tile_disk_cache = TileDiskCache(self.tile_disk_storage)
         os.makedirs(self.config.tile_cache_directory, exist_ok=True)
 
         for dataset in self.datasets.values():
@@ -1109,7 +1346,6 @@ class TileServer:
             except:
                 pass
             self.discover_metadata_for_all_parameters(dataset)
-
 
         print("* Startup finished.")
 
@@ -1120,7 +1356,10 @@ class TileServer:
         print(f"Discover metadata for dataset {dataset.id} (using {threads} threads)")
         metadata = {}
         with multiprocessing.get_context("spawn").Pool(threads) as pool:
-            metadatas = pool.starmap(ParameterMetadataParser(self.config, dataset.min_max_values_approximate_only, dataset.dataset_config.dataset_path, dataset.id).discover_metadata_for_parameter, [(dataset.parameter_metadata.get(p), p) for p in dataset.real_parameters])
+            metadatas = pool.starmap(ParameterMetadataParser(self.config, dataset.min_max_values_approximate_only,
+                                                             dataset.dataset_config.dataset_path,
+                                                             dataset.id).discover_metadata_for_parameter,
+                                     [(dataset.parameter_metadata.get(p), p) for p in dataset.real_parameters])
             for m in metadatas:
                 metadata[m.name] = m.to_dict()
         metadata_file_path = os.path.join(self.config.tile_cache_directory, f"discovered_metadata-{dataset.id}.json")
@@ -1136,14 +1375,16 @@ class TileServer:
         complete = True
         for parameter in json_data:
             dataset.parameter_metadata[parameter] = ParameterMetadata(parameter).from_dict(json_data[parameter])
-            if not dataset.parameter_metadata[parameter].is_complete() or (not dataset.min_max_values_approximate_only and dataset.parameter_metadata[parameter].min_max_values_approximate_only):
+            if not dataset.parameter_metadata[parameter].is_complete() or (
+                not dataset.min_max_values_approximate_only and dataset.parameter_metadata[
+                parameter].min_max_values_approximate_only):
                 complete = False
         for parameter in dataset.real_parameters:
             if dataset.parameter_metadata.get(parameter) == None:
                 complete = False
                 break
         return complete
-    
+
     def pre_register_requests(self, requests):
         request_group_id = self.next_request_group_id
         self.next_request_group_id += 1
@@ -1155,8 +1396,9 @@ class TileServer:
 
             _, _, _, _, _, _, tiles = self.get_metadata_and_tiles_from_request(request)
             if self.is_chunk_caching_enabled():
-                tile_slices = [tile.get_data_access_slices() for tile in tiles] # z-first
-                touched_chunks = [self.data_source_proxy.find_affected_chunks(s[2], s[1], s[0]) for s in tile_slices] # chunks are z-first
+                tile_slices = [tile.get_data_access_slices() for tile in tiles]  # z-first
+                touched_chunks = [self.data_source_proxy.find_affected_chunks(s[2], s[1], s[0]) for s in
+                                  tile_slices]  # chunks are z-first
                 set_of_touched_chunks = set([c for cc in touched_chunks for c in cc])
                 all_touched_chunks.update(set_of_touched_chunks)
             else:
@@ -1165,8 +1407,9 @@ class TileServer:
         # For chunk caching, need another loop since the union of all touched chunks is not known until the end of the loop
         if self.is_chunk_caching_enabled():
             for request in requests:
-                self.update_progress(request_group_id, request["request_id"], 0, len(all_touched_chunks), all_touched_chunks)
-    
+                self.update_progress(request_group_id, request["request_id"], 0, len(all_touched_chunks),
+                                     all_touched_chunks)
+
     def get_metadata_and_tiles_from_request(self, request):
         request_id = request["request_id"]
         request_group_id = request["request_group_id"]
@@ -1179,7 +1422,7 @@ class TileServer:
 
     def is_chunk_caching_enabled(self):
         return self.use_data_source_proxy and self.data_source_proxy.cache_chunks
-    
+
     def handle_tile_request_widget(self, request):
         before = time.perf_counter()
 
@@ -1196,14 +1439,16 @@ class TileServer:
                 cache_hits += 1
                 d = self.tile_memory_cache.get_data(t)
             else:
-                d = t.generate_from_data(self.data_source_proxy if self.use_data_source_proxy else self.data_source, self.tile_compressor)
+                d = t.generate_from_data(self.data_source_proxy if self.use_data_source_proxy else self.data_source,
+                                         self.tile_compressor)
                 tiles_generated += 1
                 self.tile_memory_cache.put_data(t, d)
             data += d
             sizes.append(len(d))
 
             if self.is_chunk_caching_enabled():
-                cached_chunks = [c for c in self.request_progress_touched_chunks[request_group_id] if self.data_source_proxy.is_chunk_cached(c)]
+                cached_chunks = [c for c in self.request_progress_touched_chunks[request_group_id] if
+                                 self.data_source_proxy.is_chunk_cached(c)]
                 self.update_progress(request_group_id, request_id, len(cached_chunks))
             else:
                 self.update_progress(request_group_id, request_id, len(sizes))
@@ -1212,8 +1457,16 @@ class TileServer:
         # if tiles_generated > 0:
         #     print(f"Finished generating tiles, took {round(time_took_secs * 1000)} milliseconds ({round(time_took_secs * 1000 / tiles_generated)} per tile)")
         return ({"response_type": "tile_data", "metadata": request, "dataSizes": sizes}, [bytes(data)])
-            
+
     async def handle_cancel_tile_requests(self, data):
+        for request_id in data.get("requestIds", []):
+            try:
+                request_id = int(request_id)
+            except (TypeError, ValueError):
+                pass
+            flag = self._foreground_cancel_flags.get(request_id)
+            if flag:
+                flag.set()
         for block in data.get("blocks", []):
             dataset = self.datasets.get(block["datasetId"])
             if not dataset:
@@ -1225,9 +1478,23 @@ class TileServer:
             flag = self._generation_cancel_flags.get(block_path)
             if flag:
                 flag.set()
-                print(f"Cancelled generation: {block['datasetId']}/{block['parameter']} {block['indexDimension']}={block['indexValue']}", flush=True)
 
     async def handle_tile_request_standalone(self, socketio, sender_id, request_data):
+        self._foreground_request_started()
+        request_id = request_data.get("requestId")
+        if request_id is None:
+            request_id = self.next_request_id
+            self.next_request_id += 1
+            request_data["requestId"] = request_id
+        else:
+            try:
+                request_id = int(request_id)
+                request_data["requestId"] = request_id
+            except (TypeError, ValueError):
+                pass
+        cancel_flag = threading.Event()
+        self._foreground_cancel_flags[request_id] = cancel_flag
+        start_background = False
         dataset_id = request_data["datasetId"]
         parameter = request_data["parameter"]
         index_dimension = dimension_mapping[request_data["indexDimension"]]
@@ -1235,97 +1502,234 @@ class TileServer:
         lod = request_data["lod"]
         xys = request_data["xys"]
         dataset = self.datasets.get(dataset_id)
-        if not (dataset and parameter in self.datasets[dataset_id].all_valid_parameters):
-            return print(f"Dataset id or parameter not found ({dataset_id} / {parameter})")
-        if (index_value % dataset.pre_generation_sparsity) != 0:
-            return print(f"Bad request for index value {index_value} in {index_dimension.name}")
-        
-        tiles = []
-        for xy in xys:
-            tiles.append(Tile(self.TILE_SIZE, dataset_id, parameter, index_dimension, index_value, lod, xy[0], xy[1]))
+        try:
+            if not (dataset and parameter in self.datasets[dataset_id].all_valid_parameters):
+                print(f"Dataset id or parameter not found ({dataset_id} / {parameter})")
+                return
+            if (index_value % dataset.pre_generation_sparsity) != 0:
+                print(f"Bad request for index value {index_value} in {index_dimension.name}")
+                return
 
-        blockfile = BlockFile(self.tile_disk_storage, dataset, parameter, index_dimension, index_value)
-        if blockfile.exists() and not self.ignore_tile_cache:
-            blockfile.load_header()
-            (sizes, data) = blockfile.get_tile_data(tiles)
-            await socketio.emit("tile_data", { "metadata": request_data, "dataSizes": sizes, "data": bytes(data) }, to=sender_id)
-        else:
+            tiles = []
+            for xy in xys:
+                tiles.append(
+                    Tile(self.TILE_SIZE, dataset_id, parameter, index_dimension, index_value, lod, xy[0], xy[1]))
+
+            tile_cache_enabled = dataset.caching_strategy_enabled("tile") and not self.ignore_tile_cache
+            block_cache_enabled = dataset.caching_strategy_enabled("block") and not self.ignore_tile_cache
+            blockfile = BlockFile(self.tile_disk_storage, dataset, parameter, index_dimension, index_value)
+
+            tile_payloads: list[bytes | None] = [None] * len(tiles)
+            tile_cache_hits = 0
+            block_cache_hits = 0
+
+            if tile_cache_enabled:
+                for i, tile in enumerate(tiles):
+                    if self.tile_disk_cache.tile_exists(tile):
+                        tile_payloads[i] = self.tile_disk_cache.read_tile(tile)
+                        tile_cache_hits += 1
+
+            missing_indices = [i for i, payload in enumerate(tile_payloads) if payload is None]
+
+            if block_cache_enabled and blockfile.exists() and missing_indices:
+                blockfile.load_header()
+                missing_tiles = [tiles[i] for i in missing_indices]
+                (sizes, data) = blockfile.get_tile_data(missing_tiles)
+                read_offset = 0
+                for idx, size in zip(missing_indices, sizes):
+                    tile_payload = data[read_offset:read_offset + size]
+                    tile_payloads[idx] = tile_payload
+                    if dataset.caching_strategy_enabled("tile"):
+                        self._maybe_write_tile_cache(dataset, tiles[idx], tile_payload)
+                    read_offset += size
+                    block_cache_hits += 1
+
+            missing_indices = [i for i, payload in enumerate(tile_payloads) if payload is None]
+            external_fetch_required = dataset.is_remote_hosted and len(missing_indices) > 0
+            await socketio.emit(
+                "tile_request_info",
+                {"requestId": request_id, "externalFetchRequired": external_fetch_required},
+                to=sender_id,
+            )
+            if missing_indices:
+                if self.forbid_runtime_tile_generation:
+                    print(f"Forbid generation of tile {request_data}")
+                    return
+                if self._shutdown_event.is_set():
+                    return
+                print(
+                    f"Generating {len(missing_indices)} tile(s) for request "
+                    f"[{dataset_id}/{parameter} {index_dimension.name}={index_value} lod={lod}]",
+                    flush=True
+                )
+                request_label = f"{dataset_id}/{parameter} {index_dimension.name}={index_value} lod={lod}"
+                print(f"  -> {request_label} foreground 0/{len(missing_indices)}", flush=True)
+                is_anomaly = parameter.endswith(ANOMALY_PARAMETER_ID_SUFFIX)
+                real_parameter = parameter[:-len(ANOMALY_PARAMETER_ID_SUFFIX)] if is_anomaly else parameter
+                source_data = dataset.data[real_parameter]
+
+                def generate_requested_tiles():
+                    generated = {}
+                    total = len(missing_indices)
+                    last_logged = -1
+                    for idx in missing_indices:
+                        if self._shutdown_event.is_set():
+                            break
+                        if cancel_flag.is_set():
+                            break
+                        tile = tiles[idx]
+                        actual_tile = tile.get_anomaly_tile() if is_anomaly else tile
+                        d = actual_tile.generate_from_data(source_data, self.tile_compressor)
+                        generated[idx] = d
+                        done = len(generated)
+                        if done != last_logged:
+                            print(f"  -> {request_label} foreground {done}/{total}", flush=True)
+                            last_logged = done
+                    return generated
+
+                loop = asyncio.get_event_loop()
+                try:
+                    generated_tiles = await loop.run_in_executor(None, generate_requested_tiles)
+                except Exception as e:
+                    print(f"Tile generation failed for request {request_data}: {e}", flush=True)
+                    return
+                if cancel_flag.is_set():
+                    print(
+                        f"Foreground request cancelled: {dataset_id}/{parameter} "
+                        f"{index_dimension.name}={index_value} lod={lod} requestId={request_id}",
+                        flush=True,
+                    )
+                    return
+                if self._shutdown_event.is_set():
+                    return
+                for idx, d in generated_tiles.items():
+                    tile_payloads[idx] = d
+                    self._maybe_write_tile_cache(dataset, tiles[idx], d)
+
+            if any(payload is None for payload in tile_payloads):
+                print(f"Error: missing tile payloads for request {request_data}", flush=True)
+                return
+
+            data = bytearray()
+            sizes = []
+            for payload in tile_payloads:
+                data += payload
+                sizes.append(len(payload))
+
+            if tile_cache_enabled or block_cache_enabled:
+                print(
+                    f"Tile request [{dataset_id}/{parameter} {index_dimension.name}={index_value} lod={lod}] "
+                    f"hits: tile_cache={tile_cache_hits} block_cache={block_cache_hits} generated={len(missing_indices)}",
+                    flush=True
+                )
+            await socketio.emit("tile_data", {"metadata": request_data, "dataSizes": sizes, "data": bytes(data)},
+                                to=sender_id)
+            if dataset.caching_strategy_enabled("block"):
+                start_background = True
+        finally:
+            self._foreground_request_finished()
+            self._foreground_cancel_flags.pop(request_id, None)
+
+        if start_background and not cancel_flag.is_set():
+            asyncio.create_task(self._generate_full_block_background(dataset, parameter, index_dimension, index_value))
+
+    async def _generate_full_block_background(self, dataset: Dataset, parameter: str, index_dimension: Dimension,
+                                              index_value: int):
+        block_path = self.tile_disk_storage.get_block_path(dataset, parameter, index_dimension, index_value)
+        if block_path not in self._block_generation_locks:
+            self._block_generation_locks[block_path] = asyncio.Lock()
+        async with self._block_generation_locks[block_path]:
+            if self._shutdown_event.is_set():
+                return
+            if os.path.exists(block_path):
+                print(
+                    f"Background block skipped (already cached): {dataset.id}/{parameter} {index_dimension.name}={index_value}",
+                    flush=True)
+                return
             if self.forbid_runtime_tile_generation:
-                print(f"Forbid generation of tile {request_data}")
+                print(
+                    f"Forbid background generation of block {dataset.id}/{parameter} {index_dimension.name}={index_value}")
                 return
             is_anomaly = parameter.endswith(ANOMALY_PARAMETER_ID_SUFFIX)
             real_parameter = parameter[:-len(ANOMALY_PARAMETER_ID_SUFFIX)] if is_anomaly else parameter
             source_data = dataset.data[real_parameter]
-            block_path = self.tile_disk_storage.get_block_path(dataset, parameter, index_dimension, index_value)
-            if block_path not in self._block_generation_locks:
-                self._block_generation_locks[block_path] = asyncio.Lock()
-            async with self._block_generation_locks[block_path]:
-                if not os.path.exists(block_path):
-                    all_tiles = Tile.get_tiles_in_range(
-                        self.TILE_SIZE, dataset, parameter, index_dimension,
-                        [index_value], range(0, dataset.max_lod + 1)
-                    )
-                    generation_cache = TileGenerationCache(self.tile_disk_storage)
-                    total = len(all_tiles)
-                    tile_compressor = self.tile_compressor
-                    print(f"Generating {total} tile(s) for full block [{dataset_id}/{parameter} {index_dimension.name}={index_value}]", flush=True)
+            all_tiles = Tile.get_tiles_in_range(
+                self.TILE_SIZE, dataset, parameter, index_dimension,
+                [index_value], range(0, dataset.max_lod + 1)
+            )
+            generation_cache = TileGenerationCache(self.tile_disk_storage)
+            total = len(all_tiles)
+            tile_compressor = self.tile_compressor
+            tile_cache_enabled = dataset.caching_strategy_enabled("tile") and not self.ignore_tile_cache
+            background_label = f"{dataset.id}/{parameter} {index_dimension.name}={index_value}"
+            print(f"Background block start: {background_label} ({total} tiles)", flush=True)
+            print(f"  -> {background_label} background 0/{total}", flush=True)
 
-                    cancel_flag = threading.Event()
-                    self._generation_cancel_flags[block_path] = cancel_flag
+            cancel_flag = threading.Event()
+            self._generation_cancel_flags[block_path] = cancel_flag
 
-                    def generate_full_block():
-                        last_pct = -1
-                        for i, tile in enumerate(all_tiles):
-                            if cancel_flag.is_set():
-                                print(f"  -> cancelled at {i}/{total}", flush=True)
-                                break
-                            actual_tile = tile.get_anomaly_tile() if is_anomaly else tile
-                            d = actual_tile.generate_from_data(source_data, tile_compressor)
-                            generation_cache.put_data(tile, d)
-                            pct = (i + 1) * 100 // total
-                            if pct % 10 == 0 and pct != last_pct:
-                                print(f"  {pct}%", flush=True)
-                                last_pct = pct
-
-                    loop = asyncio.get_event_loop()
-                    await loop.run_in_executor(None, generate_full_block)
-                    self._generation_cancel_flags.pop(block_path, None)
-
+            def generate_full_block():
+                paused = False
+                cancelled_at = None
+                for i, tile in enumerate(all_tiles):
+                    if self._shutdown_event.is_set():
+                        break
                     if cancel_flag.is_set():
-                        return
+                        cancelled_at = i
+                        print(f"  -> cancelled at {i}/{total}", flush=True)
+                        break
+                    while self._foreground_requests_active():
+                        if cancel_flag.is_set():
+                            break
+                        if not paused:
+                            print(f"  -> {background_label} paused (foreground requests active)", flush=True)
+                            paused = True
+                        self._foreground_idle_event.wait(0.1)
+                    if paused and not self._foreground_requests_active():
+                        print(f"  -> {background_label} resumed", flush=True)
+                        paused = False
+                    if cancel_flag.is_set():
+                        break
+                    if self._shutdown_event.is_set():
+                        break
+                    if tile_cache_enabled and self.tile_disk_cache.tile_exists(tile):
+                        cached_data = self.tile_disk_cache.read_tile(tile)
+                        generation_cache.put_data(tile, cached_data)
+                        continue
+                    actual_tile = tile.get_anomaly_tile() if is_anomaly else tile
+                    d = actual_tile.generate_from_data(source_data, tile_compressor)
+                    generation_cache.put_data(tile, d)
+                    self._maybe_write_tile_cache(dataset, tile, d)
+                    print(f"  -> {background_label} background {i + 1}/{total}", flush=True)
+                if cancelled_at is not None:
+                    print(f"Background block cancelled: {background_label} at {cancelled_at}/{total}", flush=True)
 
-                    should_save = dataset.enable_caching
-                    if should_save:
-                        used_bytes = self._get_dataset_cache_size_bytes(dataset)
-                        if used_bytes >= dataset.max_cache_gb * 1024 ** 3:
-                            print(f"  -> cache limit reached ({dataset.max_cache_gb} GB), not saving", flush=True)
-                            should_save = False
+            loop = asyncio.get_event_loop()
+            try:
+                await loop.run_in_executor(None, generate_full_block)
+            except Exception as e:
+                self._generation_cancel_flags.pop(block_path, None)
+                print(f"  -> tile generation failed [{dataset.id}/{parameter}]: {e}", flush=True)
+                return
+            self._generation_cancel_flags.pop(block_path, None)
 
-                    if should_save:
-                        os.makedirs(os.path.dirname(block_path), exist_ok=True)
-                        BlockFile.convert_intermediate_single_tile_files(
-                            self.TILE_SIZE, self.tile_disk_storage, generation_cache,
-                            dataset, parameter, index_dimension, index_value
-                        )
-                        print(f"  -> saved to {block_path}", flush=True)
-                        blockfile2 = BlockFile(self.tile_disk_storage, dataset, parameter, index_dimension, index_value)
-                        blockfile2.load_header()
-                        (sizes, data) = blockfile2.get_tile_data(tiles)
-                    else:
-                        data = bytearray()
-                        sizes = []
-                        for tile in tiles:
-                            d = generation_cache.get_data(tile)
-                            data += d
-                            sizes.append(len(d))
-                else:
-                    blockfile2 = BlockFile(self.tile_disk_storage, dataset, parameter, index_dimension, index_value)
-                    blockfile2.load_header()
-                    (sizes, data) = blockfile2.get_tile_data(tiles)
-            await socketio.emit("tile_data", { "metadata": request_data, "dataSizes": sizes, "data": bytes(data) }, to=sender_id)
+            if cancel_flag.is_set():
+                return
+
+            if not self._can_write_cache(dataset):
+                return
+
+            os.makedirs(os.path.dirname(block_path), exist_ok=True)
+            BlockFile.convert_intermediate_single_tile_files(
+                self.TILE_SIZE, self.tile_disk_storage, generation_cache,
+                dataset, parameter, index_dimension, index_value
+            )
+            print(f"  -> saved to {block_path}", flush=True)
+
 
 class BlockFile:
-    def __init__(self, tile_disk_storage: TileDiskStorage, dataset: Dataset, parameter: str, index_dimension: Dimension, index_value: int) -> None:
+    def __init__(self, tile_disk_storage: TileDiskStorage, dataset: Dataset, parameter: str, index_dimension: Dimension,
+                 index_value: int) -> None:
         self.path = tile_disk_storage.get_block_path(dataset, parameter, index_dimension, index_value)
         self.block_contents = dataset.block_contents[index_dimension.value]
         self.data = None
@@ -1339,18 +1743,21 @@ class BlockFile:
         self.file = open(self.path, "rb")
         header_data = self.file.read(4 * self.total_tiles)
         for i in range(self.total_tiles):
-            self.block_sizes.append(int.from_bytes(header_data[i*4:(i+1)*4], byteorder="little"))
+            self.block_sizes.append(int.from_bytes(header_data[i * 4:(i + 1) * 4], byteorder="little"))
 
     def get_tile_data(self, tiles: List[Tile]):
         total = bytearray()
         sizes = []
         header_offset = self.total_tiles * 4
-        block_index_offset = sum([s[0] * s[1] for s in self.block_contents[:tiles[0].lod]]) # offset from previous LoDs, assumed LoD is the same throughout all tiles
+        block_index_offset = sum([s[0] * s[1] for s in self.block_contents[
+            :tiles[0].lod]])  # offset from previous LoDs, assumed LoD is the same throughout all tiles
         block_indices = []
         for tile in tiles:
-            block_indices.append(block_index_offset + tile.y * self.block_contents[tile.lod][0] + tile.x) # collect indices of all requested tiles
+            block_indices.append(block_index_offset + tile.y * self.block_contents[tile.lod][
+                0] + tile.x)  # collect indices of all requested tiles
         group_function: Callable[[List[int]], int] = lambda indices: indices[0] - indices[1]
-        for _, g in groupby(enumerate(block_indices), group_function): # group adjacent requested tiles to read them together
+        for _, g in groupby(enumerate(block_indices),
+                            group_function):  # group adjacent requested tiles to read them together
             group = list(map(itemgetter(1), g))
             my_byte_offset = header_offset + sum([s for s in self.block_sizes[:group[0]]])
             self.file.seek(my_byte_offset)
@@ -1361,10 +1768,13 @@ class BlockFile:
         return (sizes, total)
 
     @staticmethod
-    def convert_intermediate_single_tile_files(tile_size: int, tile_disk_storage: TileDiskStorage, generation_cache: TileGenerationCache, dataset: Dataset, parameter: str, index_dimension: Dimension, index_value: int):
+    def convert_intermediate_single_tile_files(tile_size: int, tile_disk_storage: TileDiskStorage,
+                                               generation_cache: TileGenerationCache, dataset: Dataset, parameter: str,
+                                               index_dimension: Dimension, index_value: int):
         # tiles are in correct order already
-        tiles: List[Tile] = Tile.get_tiles_in_range(tile_size, dataset, parameter, index_dimension, [index_value], range(0, dataset.max_lod + 1))
-        
+        tiles: List[Tile] = Tile.get_tiles_in_range(tile_size, dataset, parameter, index_dimension, [index_value],
+                                                    range(0, dataset.max_lod + 1))
+
         header_data = bytearray()
         body_data = bytearray()
         for t in tiles:
@@ -1379,5 +1789,5 @@ class BlockFile:
         if generation_cache.save_on_disk:
             for t in tiles:
                 os.remove(tile_disk_storage.get_tile_path(t))
-        
+
         return len(header_data) + len(body_data)
