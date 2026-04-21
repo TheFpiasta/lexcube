@@ -4,7 +4,7 @@
 
 ![Lexcube Demo GIF](https://raw.githubusercontent.com/msoechting/lexcube/main/readme-media/lexcube-demo.gif)
 
---- 
+---
 
 **GitHub**: [https://github.com/msoechting/lexcube](https://github.com/msoechting/lexcube)
 
