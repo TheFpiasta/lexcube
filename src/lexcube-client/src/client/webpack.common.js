@@ -1,11 +1,10 @@
 const path = require('path');
-const { GitRevisionPlugin } = require('git-revision-webpack-plugin')
-const gitRevisionPlugin = new GitRevisionPlugin()
+const { GitRevisionPlugin } = require('git-revision-webpack-plugin');
+const gitRevisionPlugin = new GitRevisionPlugin();
 const HtmlWebpackPlugin = require('html-webpack-plugin');
 
-const pad = (number) => `0${number}`.slice(-2)
-
-const formatDate = (date) => `${pad(date.getDate())}.${pad(date.getMonth() + 1)}.${date.getFullYear()} ${pad(date.getHours())}:${pad(date.getMinutes())}`
+const pad = (number) => `0${number}`.slice(-2);
+const formatDate = (date) => `${pad(date.getDate())}.${pad(date.getMonth() + 1)}.${date.getFullYear()} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 
 const commitDate = new Date(gitRevisionPlugin.lastcommitdatetime());
 const buildDate = new Date();
@@ -19,11 +18,15 @@ module.exports = {
                 use: 'ts-loader',
                 exclude: /node_modules/,
             },
+            {
+                test: /\.(glb|gltf|mp4|webm)$/,
+                type: 'asset/resource',
+            }
         ],
     },
     resolve: {
         alias: {
-            three: path.resolve('./node_modules/three')
+            three: path.resolve('./node_modules/three'),
         },
         extensions: ['.tsx', '.ts', '.js'],
     },
@@ -31,16 +34,15 @@ module.exports = {
         filename: 'bundle.js',
         path: path.resolve(__dirname, '../../dist/client'),
     },
-
     plugins: [
         new HtmlWebpackPlugin({
             template: 'src/client/index.html',
-            filename: "index.html",
-            version: (gitRevisionPlugin.version().replace('"', '')),
-            commitDate: (formatDate(commitDate)),
-            buildDate: (formatDate(buildDate)),
-            commithash: (gitRevisionPlugin.commithash()),
-            branch: (gitRevisionPlugin.branch())
-        })
+            filename: 'index.html',
+            version: gitRevisionPlugin.version().replace('"', ''),
+            commitDate: formatDate(commitDate),
+            buildDate: formatDate(buildDate),
+            commithash: gitRevisionPlugin.commithash(),
+            branch: gitRevisionPlugin.branch(),
+        }),
     ],
 };

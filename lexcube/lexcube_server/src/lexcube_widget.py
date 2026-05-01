@@ -15,20 +15,20 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 from __future__ import annotations
-from .tile_server import TileServer, calculate_max_lod, API_VERSION, get_dimension_labels
+from .tile_server import DEFAULT_DIMENSIONS, DEFAULT_VARIABLE_NAME, TileServer, calculate_max_lod, API_VERSION, get_dimension_labels
 from typing import Union
 import ipywidgets as widgets
 import numpy as np
 import xarray as xr
 
 
-def start_tile_server_in_widget_mode(widget: widgets.DOMWidget, data_source: Union[xr.DataArray, np.ndarray], use_lexcube_chunk_caching: bool):
-    if type(data_source) not in [xr.DataArray, np.ndarray]:
-        print("Error: Input data is not xarray.DataArray or numpy.ndarray")
-        raise Exception("Error: Input data is not xarray.DataArray or numpy.ndarray")
-    if len(data_source.shape) != 3:
-        print("Error: Data source is not 3-dimensional")
-        raise Exception("Error: Data source is not 3-dimensional")
+def start_tile_server_in_widget_mode(widget: widgets.DOMWidget, data_source: Union[xr.DataArray, xr.Dataset, np.ndarray], use_lexcube_chunk_caching: bool):
+    if type(data_source) not in [xr.DataArray, xr.Dataset, np.ndarray]:
+        print("Error: Input data is not xarray.DataArray or xr.Dataset or numpy.ndarray")
+        raise Exception("Error: Input data is not xarray.DataArray or xr.Dataset or numpy.ndarray")
+    if not (len(data_source.shape) == 3 or len(data_source.shape) == 4):
+        print("Error: Data source is not 3- or 4-dimensional")
+        raise Exception("Error: Data source is not 3- or 4-dimensional")
 
     tile_server = TileServer(widget_mode = True)
     tile_server.startup_widget(data_source, use_lexcube_chunk_caching)
@@ -47,20 +47,22 @@ def start_tile_server_in_widget_mode(widget: widgets.DOMWidget, data_source: Uni
 
     if type(data_source) == xr.DataArray:
         dims = data_source.dims
+        if len(dims) != 3:
+            raise Exception(f"Expected 3 dimensions, got {len(dims)} dimensions in DataArray: {dims}")
         variable_name = data_source.name
         indices = { "z": get_dimension_labels(data_source, dims[0]), "y": get_dimension_labels(data_source, dims[1]), "x": get_dimension_labels(data_source, dims[2]) }
+    elif type(data_source) == xr.Dataset:
+        pass
     else:
-        dims = ["Z", "Y", "X"]
-        variable_name = "default_var"
+        dims = DEFAULT_DIMENSIONS
+        variable_name = DEFAULT_VARIABLE_NAME
         indices = { "z": list(range(data_source.shape[0])), "y": list(range(data_source.shape[1])), "x": list(range(data_source.shape[2])) }
 
     data_source_name = f"{type(data_source)}"
 
     data_attributes = {}
-    coords = {}
     if type(data_source) == xr.DataArray:
         data_attributes = data_source.attrs
-        coords = dict((c, data_source.coords[c].to_dict()) for c in data_source.coords)
 
     widget.api_metadata = {
         "/api": {"status":"ok", "api_version": API_VERSION},
@@ -69,10 +71,12 @@ def start_tile_server_in_widget_mode(widget: widgets.DOMWidget, data_source: Uni
             "dims": { f"{dims[0]}": data_source.shape[0], f"{dims[1]}": data_source.shape[1], f"{dims[2]}": data_source.shape[2] },
             "dims_ordered": dims,
             "attrs": { },
-            "coords": coords,
             "data_vars": { variable_name: { "attrs": data_attributes }}, 
             "indices": indices, 
-            "max_lod": calculate_max_lod(tile_server.TILE_SIZE, data_source.shape), 
+            "max_lod_2d": calculate_max_lod(tile_server.TILE_SIZE_2D, data_source.shape),
+            "max_lod_3d": calculate_max_lod(tile_server.TILE_SIZE_3D, data_source.shape),
+            "enable_2d_tiles": True,
+            "enable_3d_tiles": True,
             "sparsity": 1
         }
     }

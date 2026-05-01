@@ -86,13 +86,16 @@ class Cube3DWidget(widgets.DOMWidget):
     cube_scale = List(Float(), default_value=[1.0, 1.0, 1.0]).tag(sync=True)
     camera_angle = List(Float(), default_value=[0.0, 0.0, 0.0, 0.0, 0.0, 0.0]).tag(sync=True) # camera position (x,y,z) and rotation (x,y,z)
 
-    def __init__(self, data_source, cmap: Union[str, list, None] = None, vmin: Union[float, None] = None, vmax: Union[float, None] = None, isometric_mode: bool = False, use_lexcube_chunk_caching: bool = True, overlaid_geojson: Unicode = "", overlaid_geojson_color: Unicode = "black", widget_size: tuple = None, cube_scale: list = None, camera_angle: list = None, **kwargs):
+    force_float32_for_voxel_mode = Bool(False).tag(sync=True)
+
+    def __init__(self, data_source, cmap: Union[str, list, None] = None, vmin: Union[float, None] = None, vmax: Union[float, None] = None, isometric_mode: bool = False, use_lexcube_chunk_caching: bool = True, overlaid_geojson: Unicode = "", overlaid_geojson_color: Unicode = "black", widget_size: tuple = None, cube_scale: list = None, camera_angle: list = None, force_float32_for_voxel_mode: bool = False, **kwargs):
         super().__init__(**kwargs)
         self.cmap = cmap or self.cmap
         self.vmin = vmin
         self.vmax = vmax
         self.widget_size = widget_size or DEFAULT_WIDGET_SIZE
         self.isometric_mode = isometric_mode
+        self.force_float32_for_voxel_mode = force_float32_for_voxel_mode
         self.cube_scale = cube_scale or self.cube_scale
         self.camera_angle = camera_angle or self.camera_angle
         self._tile_server, self._dims, self._indices = start_tile_server_in_widget_mode(self, data_source, use_lexcube_chunk_caching)

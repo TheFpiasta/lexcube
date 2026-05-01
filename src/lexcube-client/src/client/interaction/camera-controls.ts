@@ -1,8 +1,9 @@
 import * as THREE from 'three';
 import { Vector2 } from 'three';
 import { clamp } from 'three/src/math/MathUtils';
-import { CubeInteraction } from './interaction';
-import { CubeClientContext } from './client';
+import { CubeInteraction } from '../interaction';
+import { CubeClientContext } from '../client';
+import { ORTHOGRAPHIC_MAX_ZOOM, ORTHOGRAPHIC_MIN_ZOOM, PERSPECTIVE_MAX_DISTANCE, PERSPECTIVE_MIN_DISTANCE } from '../constants';
 
 const STATE = {
   NONE: - 1,
@@ -33,8 +34,8 @@ const EPS = 0.000001;
 *    Zoom - middle mouse, or mousewheel / touch: two finger spread or squish
 *    Pan - right mouse, or arrow keys / touch: three finger swipe
 */
-export class OrbitControls extends THREE.EventDispatcher<any> {
-  object: THREE.Camera;
+export class CameraControls extends THREE.EventDispatcher<any> {
+  camera: THREE.Camera;
   domElement: HTMLElement | HTMLDocument;
   window: Window;
 
@@ -113,7 +114,7 @@ export class OrbitControls extends THREE.EventDispatcher<any> {
   constructor (context: CubeClientContext, object: THREE.Camera, domElement: HTMLElement, domWindow?: Window) {
     super();
     this.cubeInteraction = context.interaction;
-    this.object = object;
+    this.camera = object;
 
     this.domElement = ( domElement !== undefined ) ? domElement : document;
     this.window = ( domWindow !== undefined ) ? domWindow : window;
@@ -127,12 +128,12 @@ export class OrbitControls extends THREE.EventDispatcher<any> {
     this.target = new THREE.Vector3();
 
     // How far you can dolly in and out ( PerspectiveCamera only )
-    this.minDistance = () => context.isClientPortrait() ? 0.3 - (4 * (context.screenAspectRatio - 0.5)) : 2;
-    this.maxDistance = 9.5;
+    this.minDistance = () => context.isClientPortrait() ? PERSPECTIVE_MIN_DISTANCE + 2.5 : PERSPECTIVE_MIN_DISTANCE;
+    this.maxDistance = PERSPECTIVE_MAX_DISTANCE;
 
     // How far you can zoom in and out ( OrthographicCamera only )
-    this.minZoom = 0.3;
-    this.maxZoom = () => context.isClientPortrait() ? 1.4 + (3 * (context.screenAspectRatio - 0.5)) : 3.0;
+    this.minZoom = ORTHOGRAPHIC_MIN_ZOOM;
+    this.maxZoom = () => context.isClientPortrait() ? Math.min(ORTHOGRAPHIC_MAX_ZOOM, ORTHOGRAPHIC_MAX_ZOOM - 0.3 + (3 * (context.screenAspectRatio - 0.5))) : ORTHOGRAPHIC_MAX_ZOOM;
 
     // How far you can orbit vertically, upper and lower limits.
     // Range is 0 to Math.PI radians.
@@ -178,8 +179,8 @@ export class OrbitControls extends THREE.EventDispatcher<any> {
 
     // for reset
     this.target0 = this.target.clone();
-    this.position0 = this.object.position.clone();
-    this.zoom0 = (this.object as any).zoom;
+    this.position0 = this.camera.position.clone();
+    this.zoom0 = (this.camera as any).zoom;
 
     // for update speedup
     this.updateOffset = new THREE.Vector3();
@@ -482,13 +483,13 @@ export class OrbitControls extends THREE.EventDispatcher<any> {
   }
 
   update (reconstructTargetFromRotation: boolean = false) {
-    const position = this.object.position;
+    const position = this.camera.position;
     
     if (reconstructTargetFromRotation) {
       // walk from object position in direction of object rotation to set the target
-      const newtarget = new THREE.Vector3(0, 0, -1).applyEuler(this.object.rotation).multiplyScalar(this.object.position.length()).add(this.object.position);
+      const newtarget = new THREE.Vector3(0, 0, -1).applyEuler(this.camera.rotation).multiplyScalar(this.camera.position.length()).add(this.camera.position);
       this.target.copy(newtarget);
-      this.spherical.radius = this.object.position.distanceTo(this.target);
+      this.spherical.radius = this.camera.position.distanceTo(this.target);
     }
 
     this.updateOffset.copy( position ).sub( this.target );
@@ -529,7 +530,7 @@ export class OrbitControls extends THREE.EventDispatcher<any> {
 
     position.copy( this.target ).add( this.updateOffset );
 
-    this.object.lookAt( this.target );
+    this.camera.lookAt( this.target );
 
     if ( this.enableDamping === true ) {
 
@@ -549,15 +550,15 @@ export class OrbitControls extends THREE.EventDispatcher<any> {
     // min(camera displacement, camera rotation in radians)^2 > EPS
     // using small-angle approximation cos(x/2) = 1 - x^2 / 8
 
-    this.object.updateMatrixWorld();
+    this.camera.updateMatrixWorld();
 
     if ( this.zoomChanged ||
-      this.updateLastPosition.distanceToSquared( this.object.position ) > EPS ||
-      8 * ( 1 - this.updateLastQuaternion.dot( this.object.quaternion ) ) > EPS ) {
+      this.updateLastPosition.distanceToSquared( this.camera.position ) > EPS ||
+      8 * ( 1 - this.updateLastQuaternion.dot( this.camera.quaternion ) ) > EPS ) {
 
       this.dispatchEvent( CHANGE_EVENT );
-      this.updateLastPosition.copy( this.object.position );
-      this.updateLastQuaternion.copy( this.object.quaternion );
+      this.updateLastPosition.copy( this.camera.position );
+      this.updateLastQuaternion.copy( this.camera.quaternion );
       this.zoomChanged = false;
       return true;
     }
@@ -580,22 +581,22 @@ export class OrbitControls extends THREE.EventDispatcher<any> {
   pan( deltaX: number, deltaY: number ) {
     const element = this.domElement === document ? this.domElement.body : this.domElement;
 
-    if (this._checkPerspectiveCamera(this.object)) {
+    if (this._checkPerspectiveCamera(this.camera)) {
       // perspective
-      const position = this.object.position;
+      const position = this.camera.position;
       this.panInternalOffset.copy( position ).sub( this.target );
       var targetDistance = this.panInternalOffset.length();
 
       // half of the fov is center to top of screen
-      targetDistance *= Math.tan( ( this.object.fov / 2 ) * Math.PI / 180.0 );
+      targetDistance *= Math.tan( ( this.camera.fov / 2 ) * Math.PI / 180.0 );
 
       // we actually don't use screenWidth, since perspective camera is fixed to screen height
-      this.panLeft( 2 * deltaX * targetDistance / (element as any).clientHeight, this.object.matrix );
-      this.panUp( 2 * deltaY * targetDistance / (element as any).clientHeight, this.object.matrix );
-    } else if (this._checkOrthographicCamera(this.object)) {
+      this.panLeft( 2 * deltaX * targetDistance / (element as any).clientHeight, this.camera.matrix );
+      this.panUp( 2 * deltaY * targetDistance / (element as any).clientHeight, this.camera.matrix );
+    } else if (this._checkOrthographicCamera(this.camera)) {
       // orthographic
-      this.panLeft( deltaX * ( this.object.right - this.object.left ) / this.object.zoom / (element as any).clientWidth, this.object.matrix );
-      this.panUp( deltaY * ( this.object.top - this.object.bottom ) / this.object.zoom / (element as any).clientHeight, this.object.matrix );
+      this.panLeft( deltaX * ( this.camera.right - this.camera.left ) / this.camera.zoom / (element as any).clientWidth, this.camera.matrix );
+      this.panUp( deltaY * ( this.camera.top - this.camera.bottom ) / this.camera.zoom / (element as any).clientHeight, this.camera.matrix );
     } else {
       // camera neither orthographic nor perspective
       console.warn( 'WARNING: OrbitControls.js encountered an unknown camera type - pan disabled.' );
@@ -604,11 +605,11 @@ export class OrbitControls extends THREE.EventDispatcher<any> {
   }
 
   dollyIn( dollyScale: number ) {
-    if (this._checkPerspectiveCamera(this.object)) {
+    if (this._checkPerspectiveCamera(this.camera)) {
       this.scale /= dollyScale;
-    } else if (this._checkOrthographicCamera(this.object)) {
-      this.object.zoom = Math.max( this.minZoom, Math.min( this.maxZoom(), this.object.zoom * dollyScale ) );
-      this.object.updateProjectionMatrix();
+    } else if (this._checkOrthographicCamera(this.camera)) {
+      this.camera.zoom = Math.max( this.minZoom, Math.min( this.maxZoom(), this.camera.zoom * dollyScale ) );
+      this.camera.updateProjectionMatrix();
       this.zoomChanged = true;
     } else {
       console.warn( 'WARNING: OrbitControls.js encountered an unknown camera type - dolly/zoom disabled.' );
@@ -617,11 +618,11 @@ export class OrbitControls extends THREE.EventDispatcher<any> {
   }
 
   dollyOut( dollyScale: number ) {
-    if (this._checkPerspectiveCamera(this.object)) {
+    if (this._checkPerspectiveCamera(this.camera)) {
       this.scale *= dollyScale;
-    } else if (this._checkOrthographicCamera(this.object)) {
-      this.object.zoom = Math.max( this.minZoom, Math.min( this.maxZoom(), this.object.zoom / dollyScale ) );
-      this.object.updateProjectionMatrix();
+    } else if (this._checkOrthographicCamera(this.camera)) {
+      this.camera.zoom = Math.max( this.minZoom, Math.min( this.maxZoom(), this.camera.zoom / dollyScale ) );
+      this.camera.updateProjectionMatrix();
       this.zoomChanged = true;
     } else {
       console.warn( 'WARNING: OrbitControls.js encountered an unknown camera type - dolly/zoom disabled.' );
@@ -671,10 +672,10 @@ export class OrbitControls extends THREE.EventDispatcher<any> {
 
   reset (): void {
     this.target.copy( this.target0 );
-    this.object.position.copy( this.position0 );
-    (this.object as any).zoom = this.zoom0;
+    this.camera.position.copy( this.position0 );
+    (this.camera as any).zoom = this.zoom0;
 
-    (this.object as any).updateProjectionMatrix();
+    (this.camera as any).updateProjectionMatrix();
     this.dispatchEvent( CHANGE_EVENT );
 
     this.update();
@@ -684,10 +685,10 @@ export class OrbitControls extends THREE.EventDispatcher<any> {
 
   saveState(): void {
     this.target0.copy(this.target);
-    this.position0.copy(this.object.position);
+    this.position0.copy(this.camera.position);
     // Check whether the camera has zoom property
-    if (this._checkOrthographicCamera(this.object) || this._checkPerspectiveCamera(this.object)){
-      this.zoom0 = this.object.zoom;
+    if (this._checkOrthographicCamera(this.camera) || this._checkPerspectiveCamera(this.camera)){
+      this.zoom0 = this.camera.zoom;
     }
   }
 

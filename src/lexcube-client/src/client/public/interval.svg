@@ -1,0 +1,91 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!-- Created with Inkscape (http://www.inkscape.org/) -->
+
+<svg
+   width="31.999998"
+   height="32"
+   viewBox="0 0 8.466666 8.4666668"
+   version="1.1"
+   id="svg5"
+   inkscape:export-filename="interval.svg"
+   inkscape:export-xdpi="96"
+   inkscape:export-ydpi="96"
+   xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+   xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
+   xmlns="http://www.w3.org/2000/svg"
+   xmlns:svg="http://www.w3.org/2000/svg">
+  <sodipodi:namedview
+     id="namedview7"
+     pagecolor="#000000"
+     bordercolor="#000000"
+     borderopacity="0.25"
+     inkscape:showpageshadow="2"
+     inkscape:pageopacity="0"
+     inkscape:pagecheckerboard="0"
+     inkscape:deskcolor="#d1d1d1"
+     inkscape:document-units="mm"
+     showgrid="false" />
+  <defs
+     id="defs2" />
+  <g
+     inkscape:groupmode="layer"
+     id="layer3"
+     inkscape:label="Layer 3"
+     style="display:none">
+    <g
+       aria-label="≥"
+       id="text896"
+       style="font-weight:bold;font-size:11.2889px;line-height:1.25;font-family:'Segoe UI';-inkscape-font-specification:'Segoe UI, Bold';text-align:center;text-anchor:middle;fill:#ffffff;stroke:#ffffff;stroke-width:0;stroke-linecap:round;stroke-linejoin:round">
+      <path
+         d="M 6.8240476,4.0817492 1.6646674,6.2811004 V 4.9747188 L 5.3467892,3.6187279 V 3.5966792 L 1.6646674,2.1304451 V 0.81855139 L 6.8240476,3.1226336 Z m 0.088195,3.5663664 H 1.5544242 V 6.5291475 h 5.357818 z"
+         id="path5198" />
+    </g>
+  </g>
+  <g
+     inkscape:groupmode="layer"
+     id="layer2"
+     inkscape:label="Layer 2"
+     style="display:none">
+    <g
+       aria-label="≤"
+       id="text1002"
+       style="font-weight:bold;font-size:11.2889px;line-height:1.25;font-family:'Segoe UI';-inkscape-font-specification:'Segoe UI, Bold';text-align:center;text-anchor:middle;fill:#ffffff;stroke:#ffffff;stroke-width:0;stroke-linecap:round;stroke-linejoin:round">
+      <path
+         d="M 6.8240476,6.2811004 1.6646674,4.0817492 V 3.1226336 L 6.8240476,0.81855139 V 2.1304451 L 3.1419258,3.5856549 v 0.022049 l 3.6821218,1.3670153 z m 0.088195,1.3670152 H 1.5544242 V 6.5291475 h 5.357818 z"
+         id="path5195" />
+    </g>
+  </g>
+  <g
+     inkscape:groupmode="layer"
+     id="layer4"
+     inkscape:label="Layer 4"
+     style="display:none">
+    <g
+       aria-label="[]"
+       id="text1002-1"
+       style="font-weight:bold;font-size:7.76111px;line-height:1.25;font-family:'Segoe UI';-inkscape-font-specification:'Segoe UI, Bold';text-align:center;text-anchor:middle;fill:#ffffff;stroke:#ffffff;stroke-width:0;stroke-linecap:round;stroke-linejoin:round">
+      <path
+         d="M 3.9642714,7.5681852 H 2.1869469 V 0.89848144 H 3.9642714 V 1.6601919 H 3.1722441 v 5.1462828 h 0.7920273 z"
+         id="path5201" />
+      <path
+         d="M 6.2797196,7.5681852 H 4.4948159 V 6.8064747 H 5.2944225 V 1.6601919 H 4.4948159 V 0.89848144 h 1.7849037 z"
+         id="path5203" />
+    </g>
+  </g>
+  <g
+     inkscape:label="Layer 1"
+     inkscape:groupmode="layer"
+     id="layer1"
+     style="display:inline">
+    <g
+       aria-label="-"
+       transform="matrix(0,1.0635068,-0.94028552,0,0,0)"
+       id="text2466-7-3"
+       style="font-weight:bold;font-size:11.751px;line-height:1.25;font-family:'Segoe UI';-inkscape-font-specification:'Segoe UI, Bold';text-align:center;text-anchor:middle;fill:#ffffff;stroke:#ffffff;stroke-width:0;stroke-linecap:round;stroke-linejoin:round"
+       class="UnoptimicedTransforms">
+      <path
+         id="path5212"
+         d="M 5.5498294,-6.4974898 H 2.4112565 V -7.765542 h 3.1385729 z m 0,5.3374765 H 2.4112565 V -2.4280656 H 5.5498294 Z M 4.6145769,-6.497489 v 4.0694234 H 3.3465245 V -6.497489 Z" />
+    </g>
+  </g>
+</svg>

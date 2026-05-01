@@ -912,5 +912,32 @@
             "colormapMaximumValue": 0.018,
             "colormap": "deep"
         }
+    ],
+    "ecv-anomalies": [
+        {
+            "key": "r",
+            "colormapMinimumValue": -25,
+            "colormapMaximumValue": 25
+        },
+        {
+            "key": "siconc",
+            "colormapMinimumValue": -0.6,
+            "colormapMaximumValue": 0.6
+        },
+        {
+            "key": "swvl1",
+            "colormapMinimumValue": -0.25,
+            "colormapMaximumValue": 0.25
+        },
+        {
+            "key": "t2m",
+            "colormapMinimumValue": -7,
+            "colormapMaximumValue": 7
+        },
+        {
+            "key": "tp",
+            "colormapMinimumValue": -0.02,
+            "colormapMaximumValue": 0.02
+        }
     ]
 }

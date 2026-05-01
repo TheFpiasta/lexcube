@@ -14,9 +14,9 @@
 
 ---
 
-**NEW with version 0.4.16**: [Craft your own paper data cube!](#print-your-own-paper-data-cube)
+**NEW with version 2.0**: [Voxel Mode](#voxel-mode) & [Time Series](#time-series)
 
-![Print template graphic](https://raw.githubusercontent.com/msoechting/lexcube/main/readme-media/print-template.png)
+![Voxel Mode Demo GIF](https://raw.githubusercontent.com/msoechting/lexcube/main/readme-media/lexcube-voxel-mode.gif)
 
 ---
 
@@ -50,6 +50,8 @@ Example notebooks can be found in the [examples](https://github.com/msoechting/l
 - [Installation](#installation)
 - [Cube Visualization](#cube-visualization)
 - [Interacting with the Cube](#interacting-with-the-cube)
+- [Voxel Mode](#voxel-mode)
+- [Time Series](#time-series)
 - [Range Boundaries](#range-boundaries)
 - [Colormaps](#colormaps)
   - [Supported colormaps](#supported-colormaps)
@@ -184,6 +186,26 @@ On the cube, the dimensions are visualized as follow: X from left-to-right (0 to
 - Moving over the cube with your cursor will show a tooltip in the bottom left about the pixel under the cursor.
 - For more precise input, you can use the sliders provided by `w.show_sliders()`:
 ![Sliders](https://raw.githubusercontent.com/msoechting/lexcube/main/readme-media/sliders.png)
+
+## Voxel Mode
+Voxel mode allows to explore your data even further by displaying all observations as single voxels that can be hidden based on thresholds.
+The mode can give you interesting insights and pretty visuals, but is more demanding on your machine than the regular visualization mode.
+You can toggle voxel mode by clicking on the "three blocks" icon in the toolbar in the top right.
+You can then use the slider to threshold the currently visible voxels.
+Clicking the slider switches between `>=`, `<=` and range-based thresholding.
+Voxel mode by default uses float16 (half-float precision) to save GPU memory and allow for visualization of larger data sets. 
+If your data requires float32 precision, you can pass `lexcube.Cube3DWidget(da, force_float32_for_voxel_mode=True)` in the constructor to enable float32 precision for voxel mode.
+If you want to improve the 3D rendering performance in voxel mode, you can switch to isometric mode (`lexcube.Cube3DWidget(da, isometric_mode=True)`, see ![Save figures](#save-figures)), which will improve GPU rendering performance - memory load and data access performance is however unchanged.
+
+![Voxel Mode Demo GIF](https://raw.githubusercontent.com/msoechting/lexcube/main/readme-media/lexcube-voxel-mode.gif)
+
+## Time Series
+Left-clicking on the front of the cube allows to plot the time series at that location.
+The time extent of the time series is synced to the current time selection in the data cube, i.e., if you want to see a longer time series, you need to zoom out on the cube or using the sliders.
+To increase the size of the time series chart, increase the size of the widget through the `.plot` parameters: `w.plot(16, 7)`
+Clicking on a pin or clicking the "x" on the chart will remove the time series.
+
+![Time series](https://raw.githubusercontent.com/msoechting/lexcube/main/readme-media/time-series.png)
 
 
 ## Range Boundaries

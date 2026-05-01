@@ -2,9 +2,9 @@
 <html lang="en">
 
 <head>
-    <title>LexCube - Leipzig Explorer of Earth Data Cubes</title>
-    <meta name="title" content="LexCube - Leipzig Explorer of Earth Data Cubes">
-    <meta name="description" content="LexCube is an interactive visualization for large-scale earth data sets. Created at Leipzig University by Maximilian Söchting.">
+    <title>Lexcube - Leipzig Explorer of Earth Data Cubes</title>
+    <meta name="title" content="Lexcube - Leipzig Explorer of Earth Data Cubes">
+    <meta name="description" content="Lexcube is an interactive visualization for large-scale earth data sets. Created at Leipzig University by Maximilian Söchting.">
     <meta name="keywords" content="data cube, earth system data cube, leipzig, esdl, earth system data lab, interactive, visualization, geoscience, remote sensing, geophysics, esa, european space agency">
     <meta name="robots" content="index, follow">
     <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
@@ -28,10 +28,16 @@
     <meta name="msapplication-TileColor" content="#ffffff">
     <meta name="msapplication-TileImage" content="/ms-icon-144x144.png">
     <meta name="theme-color" content="#ffffff">
-    <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
     <link href="nouislider.css" rel="stylesheet">
     <link href="style.css" rel="stylesheet">
     <style>
+        html, body {
+            height: 100%;
+            overflow: hidden;
+            touch-action: none;
+        }
+        
         .expert-mode { 
             display: none;
         }
@@ -55,7 +61,7 @@
 
 <body class="lexcube-body">
 
-    <div class="fullscreen-wrapper nopointer noselect axis-label-ui" style="text-align: center; color:white">
+    <div class="fullscreen-wrapper nopointer noselect axis-label-ui" style="text-align: center; color:white;">
         <div style="position: absolute" class="axis-label-parent axis-label-parent-x-min"><div class="axis-label axis-label-x-min"></div></div>
         <div style="position: absolute" class="axis-label-parent axis-label-parent-x-max"><div class="axis-label axis-label-x-max"></div></div>
         <div style="position: absolute" class="axis-label-parent axis-label-parent-x-dimension-name"><div class="axis-label axis-label-x-dimension-name"></div></div>
@@ -106,8 +112,8 @@
                     <div>Total Time: <span class="animation-total-duration" style="font-weight: bold;">10.5</span> s</div>
                     <hr style="width: 100%;">
                     <label class="animation-selected-range-only-checkbox-label"><input type="checkbox" class="animation-selected-range-only-checkbox" name="animation-selected-range-only"/><div class="animation-selected-range-only-checkbox-label-div" style="display: contents;"> Only animate last selection (X to Y)</div></label>
-                    <hr style="width: 100%;">
-                    <div>
+                    <div class="animation-recording-section">
+                        <hr style="width: 100%;">
                         <label class="animation-recording-checkbox-label"><input type="checkbox" class="animation-recording-checkbox" name="animation-recording"/> Record Animation</label>
                         <div class="animation-recording-in-progress-panel" style="display: none;">
                             <div class="animation-recording-status" style="color: rgb(255, 43, 48); font-weight: bold;width: 100%;text-align: center;">Recording Animation...</div>
@@ -129,20 +135,18 @@
                 </div>
             </div>
         </div>
+        <div class="toolbar-ui-button download-dataset-subset-button" title="Download currently visible data subset" style="background-image: url('download.svg'); display: none;"></div>
         <div class="toolbar-ui-button download-image-button" title="Download Image" style="background-image: url('download.svg'); display: none;"></div>
         <div class="toolbar-ui-button download-template-button" title="Download Print Template" style="background-image: url('download-print-template.svg');"></div>
         <div class="toolbar-ui-button gps-button" title="Show Current Location on Cube" style="background-image: url('location.svg');"></div>
+        <div class="toolbar-ui-button enable-volume-viz-button" title="Enable Volume Visualization" style="background-image: url('enable-volume-viz.svg'); display:none;"></div>
+        <div class="toolbar-ui-button disable-volume-viz-button" title="Disable Volume Visualization" style="background-image: url('disable-volume-viz.svg');display:none;"></div>
     </div>
 
-    <div class="fullscreen-wrapper nopointer noselect corner-logo-ui">
-        <img src="lexcube-logo.png" class="corner-logo" style="position:absolute; top: 1.5%; left: 1.5%; opacity: 0.9; max-width: 40%; margin-left: -2px;
-        margin-top: -2px;max-height: 50px;"/>
-    </div>
+    <div class="flex-col-center-end nopointer noselect bottom-left-ui">
+        <div class="ui-normal nopointer noselect hover-info-ui"></div>
 
-    <div class="flex-col-center-end noselect bottom-left-ui">
-        <div class="ui-normal nopointer hover-info-ui"></div>
-
-        <div class="colormap-options flex-col-center-end noselect ui-normal" style="overflow-x: clip; max-width: 220px; display: none;">
+        <div class="colormap-options flex-col-center-end noselect ui-normal" style="overflow-x: clip; max-width: 220px; display: none; pointer-events: all;">
             <div class="colormap-section" style="overflow-y: auto;">
                 <div class="btn-group colormap-list" style="overflow-y: auto;">
     
@@ -164,7 +168,7 @@
                 </div>
             </div>
         </div>
-        <div class="flex-col-center-end color-scale">
+        <div class="flex-col-center-end color-scale" style="pointer-events: all;">
             <div class="color-scale-gradient"></div>
             <div class="color-scale-labels">
                 <div class="color-scale-label"></div>
@@ -181,6 +185,19 @@
         <a href='https://github.com/msoechting/lexcube' target='_blank'><div style="background-image: url('lexcube-jupyter.png'); width: 337px;;
         height: 140px;background-size: contain; cursor:pointer"></div></a>
         <div class="close-button" onclick="this.parentNode.onclick()"></div>
+    </div>
+
+    <div id="attribution-banner" class="nopointer noselect attribution-banner" style="height: 7%; top: 0px; position: absolute; width: 85%; color: white; font-size: 1.2em; flex-direction: row; font-size: small; display: flex; align-items: center; justify-content: center; gap: 1%; left: 7.5%;">
+        <img src="WBM_UL_RGB_digital_white.png" style="max-height: 100%;  max-width: fit-content;"/>
+        <img src="lexcube-logo.png" style="max-height: 60%;  max-width: fit-content;"/>
+        <img src="ESA_logo_2020_White.png" style="max-height: 100%;  max-width: fit-content;"/>
+    </div>
+    
+    <div class="fullscreen-wrapper noselect nopointer flex-row-center-end">
+        <div style="width: 25%; height: 32%; margin-right: 1.5%; display: none; background-color: rgba(0, 0, 0, 0.95); border-radius: 5px;position: relative; padding: 10px;" class="time-series-ui">
+            <div style="position: absolute; top: -17px; right: -3px; cursor: pointer; color:white; pointer-events: all; padding: 10px; font-weight: bold;" class="time-series-close-button">x</div>
+            <canvas class="time-series-canvas" style="pointer-events:all;"></canvas>
+        </div>
     </div>
 
     <div class="ui-normal noselect options-ui" style="display: none;">
@@ -210,27 +227,110 @@
             </select>
         </div>
         <hr>
-        <h3 class="noselect" style="cursor: pointer;" onclick="f = this.nextSibling; let e = this; if (f.style.display == 'none') { f.style.display = 'block'; e.textContent = '▼ ' + e.textContent.substring(2) } else { f.style.display = 'none';  e.textContent = '► ' + e.textContent.substring(2) }">▼ Current Selection</h3><div class="selection-section">
+        <h3 class="noselect" style="cursor: pointer;" onclick="collapse(this)">▼ Current Selection</h3>
+        <div class="selection-section" style="min-width: 330px;">
             <div class="x-selection-slider-label">X:</div>
-            <div>
+            <div class="slider-parent">
                 <div class="slider x-selection-slider"></div>
             </div>
             <div class="y-selection-slider-label">Y:</div>
-            <div>
+            <div class="slider-parent">
                 <div class="slider y-selection-slider"></div>
             </div>
             <div class="z-selection-slider-label">Z:</div>
-            <div>
+            <div class="slider-parent">
                 <div class="slider z-selection-slider"></div>
             </div>
+        </div>
+
+    </div>
+
+    <div class="flex-col-center-end noselect">
+        <div class="volume-viz-section ui-normal" style="max-width: 700px; max-height: 250px; bottom: 2.5%; position: absolute; display: none; flex-direction: row; gap: 5px;">
+            <div class="volume-viz-loader-column" style="width: 350px; display: flex; flex-direction: column; flex: 1; justify-content: center; align-items: center;">
+                <div style="color: white; margin-top: 10px;">Loading voxel visualization...</div>
+                <video playsinline loop muted autoplay style='height: auto; width: 120px;'>
+                    <source src="loader.mp4" type="video/mp4">
+                </video>
+            </div>
+            <div class="volume-viz-main-column" style="width: 350px; display: none; flex-direction: column; flex: 1;">
+                <div class="volume-viz-description-row" style="margin: 15px 20px 10px 20px;">
+                    Showing <span class="volume-viz-threshold-target" style="background-color: rgb(66, 44, 87); cursor: pointer;">anomalies (deviations from mean seasonal cycle)</span> <span class="volume-viz-threshold-type" style="background-color: rgb(50, 64, 25); cursor: pointer;">above the 99th percentile</span> <span class="volume-viz-threshold-spatial-quantile-context" style="background-color: rgb(0, 75, 100); cursor: pointer;">across all locations</span>.
+                    <br><span class="volume-viz-event-explore-link" style="text-decoration: underline; cursor: pointer; display: block; text-align: center;"
+                        onclick="const t = document.getElementsByClassName('volume-viz-event-column')[0]; t.style.display = t.style.display == 'none' ? 'block' : 'none';"
+                    >Explore 42 events ></span>
+                </div>
+
+                <div class="volume-viz-slider-row" style="display: flex; flex-direction: row; align-items: center;">
+                    <div class="volume-viz-threshold-slider-signs" style="width:32px;display: flex; flex-direction: column; cursor: pointer;"> 
+                        <div class="volume-viz-threshold-slider-sign-less-than" style="width: 24px;height: 24px; background-size: cover; background-image: url('less-than.svg');"></div>
+                        <div class="volume-viz-threshold-slider-sign-interval" style="width: 24px;height: 24px; background-size: cover; background-image: url('interval.svg');"></div>
+                        <div class="volume-viz-threshold-slider-sign-greater-than" style="width: 24px;height: 24px; background-size: cover; background-image: url('greater-than.svg');"></div>
+                    </div>
+                    <div class="slider-parent" style="flex: 2; padding: 0px;">
+                        <div class="slider volume-viz-threshold-slider"></div>
+                    </div>
+
+                    <div class="slider-parent" style="flex: 2; padding: 0px;">
+                        <div class="slider volume-viz-range-slider"></div>
+                    </div>
+                    
+                    <div class="slider-parent" style="flex: 2; padding: 0px;">
+                        <div class="slider volume-viz-quantile-slider"></div>
+                    </div>
+    
+                </div>
+                <div class="volume-viz-stats-row expert-mode" style="display: block; flex-direction: row; align-items: center; font-size: x-small; text-align: center;">
+                    Loading...
+                </div>
+            </div>
+            <div class="volume-viz-event-column" style="width: 350px; flex: 1; max-height: 215px; overflow: auto; display: none; padding: 5px;">
+                <table style="border-collapse:collapse; font-size: small;" class="volume-viz-event-table">
+                    <thead>
+                        <tr>
+                        <th>ID</th>
+                        <th>#obs</th>
+                        <th style="min-width: 78px;">Start / End</th>
+                        <th>Spatial Extent</th>
+                        <th>Location</th>
+                        </tr>
+                    </thead>
+                    <tbody class="volume-viz-event-table-body">  <!--style="tr:nth-child(even){ background: #fafafacb; }"-->
+                        <tr>
+                        <td>#1</td>
+                        <td>3 obs</td>
+                        <td>02 Dec 2008 /<br>09 Dec 2008</td>
+                        <td>402 km²<br>(51×42)</td>
+                        <td>22°22'30''N /<br>103°22'30''W</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+
         </div>
     </div>
 
     <div class="fullscreen-wrapper nopointer noselect">
-        <div style="text-align: center; margin-top: 3%;">
-            <div class="status-message">Starting LexCube...</div>
+        <div style="text-align: center; margin-top: 3.5%;">
+            <div class="status-message">Starting Lexcube...</div>
         </div>
     </div>
+
+    <div class="fullscreen-wrapper nopointer noselect">
+        <!-- center horizontally and vetically-->
+         <div class="resolution-change-popup" style="display: none; justify-content: center; align-items: center; height: 100%; ">
+                <div style='width: 250px; height: 340px; display:flex; align-items: center; gap: 1rem; margin-top: 0.5rem; margin-bottom: 0.5rem; flex-direction: column; padding-left: 2rem; padding-right: 2rem; padding-top: 1rem; padding-bottom: 2rem; background-color: rgba(4, 9, 25); box-shadow: 0 0 30px rgba(0, 0, 0, 0.5); '>
+                    <video playsinline loop muted autoplay style='height: auto; width: 250px;'>
+                        <source src="loader.mp4" type="video/mp4">
+                    </video>
+                    <div style="display: flex; flex-direction: column; align-items: center; gap: 0.5rem;">
+                        <div class="resolution-change-heading" style='font-size: 1.3rem; color:white; text-align: center;'>Expanding 3D storage...</div>
+                        <div class="resolution-change-label" style='font-size: 0.8rem; color:white; text-align: center;'>(100% resolution)</div>
+                    </div>
+            </div>
+         </div>
+    </div>
+    
     <div class="fullscreen-wrapper flex-col-center dataset-info-wrapper">
         <div class="ui-normal flex-col-center dataset-info-window">
             <div class="dataset-info" style="max-width: 100%; overflow-y: auto; overflow-x: hidden;"></div>
@@ -238,26 +338,29 @@
             <div style="width: 100%; text-align: center;"> 
                 <hr>
                 <div class="expert-mode">
-                    LexCube is an interactive visualization of large-scale earth data sets. Created at Leipzig University by Maximilian Söchting.
+                    Lexcube is an interactive visualization of large-scale earth data sets. Created at Leipzig University by Maximilian Söchting.
                 </div>
                 <div><b>When using Lexcube and generated images or videos, please acknowledge/cite</b>: M. Söchting, M. D. Mahecha, D. Montero and G. Scheuermann, "Lexcube: Interactive Visualization of Large Earth System Data Cubes," in IEEE Computer Graphics and Applications, vol. 44, no. 1, pp. 25-37, Jan.-Feb. 2024, doi: <a href="https://www.doi.org/10.1109/MCG.2023.3321989" target="_blank">10.1109/MCG.2023.3321989</a>.</div>
 
                 <div class="expert-mode">
-                    Client Version: <%= htmlWebpackPlugin.options.version %> (Commit: <%= htmlWebpackPlugin.options.commitDate %>, Build: <%= htmlWebpackPlugin.options.buildDate %>)
+                    Client Version: __LEXCUBE_VERSION__ (Commit: __LEXCUBE_COMMIT_DATE__, Build: __LEXCUBE_BUILD_DATE__)
                 </div>
             </div>
             <button style="margin-top: 10px" onclick="this.parentNode.parentNode.style.display = 'none'">Acknowledge</button>
         </div>
     </div>
 
+    <script type="module" src="/client.ts"></script>
+
     <div class="fullscreen-wrapper flex-col-center tutorial-wrapper" style="background-color: rgba(255, 255, 255, 0.7);" onclick="this.parentNode.removeChild(this)">
         <div class="ui-normal flex-col-center tutorial-window" style="box-shadow: 10px 10px 20px black;" onclick="event.stopPropagation()">
-            <div style="width: 100%; text-align: center;">
-                <h2>LexCube: How to Use</h2>
+            <div style="max-width: 600px; text-align: center;">
+                <h2>Lexcube: How to Use</h2>
                 <div class="tutorial-mouse" style="display: none;">
                     <div style="margin-bottom: 5px;">1. Drag and scroll on the <b>background</b> to move and rotate the cube.</div>
                     <div style="margin-bottom: 5px;">2. Drag and scroll on the <b>cube</b> to interact with the data.</div>
-                    <video class="tutorial-video" onloadeddata="try { this.play(); } catch(e) {}" playsinline loop muted controls>
+                    <div style="margin-bottom: 5px;">3. Select different data <img src="data-management.svg" style="width: 24px; height: 24px; vertical-align: middle;"/>, play an animation <img src="play.svg" style="width: 24px; height: 24px; vertical-align: middle;"/>, print your own cube <img src="download-print-template.svg" style="width: 24px; height: 24px; vertical-align: middle;"/>, or explore voxel mode <img src="enable-volume-viz.svg" style="width: 24px; height: 24px; vertical-align: middle;"/>.</div>
+                    <video class="tutorial-video" onloadeddata="this.play().catch((e) => {})" loop muted playsinline controls>
                         <source src="demo-mouse-an.mp4" type="video/mp4">
                         Your browser does not support the video tag.
                     </video>
@@ -265,7 +368,8 @@
                 <div class="tutorial-touch" style="display: none;">
                     <div style="margin-bottom: 5px;">1. Touch and drag on the <b>background</b> to move and rotate the cube.</div>
                     <div style="margin-bottom: 5px;">2. Touch and drag on the <b>cube</b> to interact with the data.</div>
-                    <video class="tutorial-video" onloadeddata="try { this.play(); } catch(e) {}" playsinline loop muted controls>
+                    <div style="margin-bottom: 5px;">3. Select different data <img src="data-management.svg" style="width: 24px; height: 24px; vertical-align: middle;"/>, play an animation <img src="play.svg" style="width: 24px; height: 24px; vertical-align: middle;"/>, print your own cube <img src="download-print-template.svg" style="width: 24px; height: 24px; vertical-align: middle;"/>, or explore voxel mode <img src="enable-volume-viz.svg" style="width: 24px; height: 24px; vertical-align: middle;"/>.</div>
+                    <video class="tutorial-video" onloadeddata="this.play().catch((e) => {})" loop muted playsinline controls>
                         <source src="demo-touch-an.mp4" type="video/mp4">
                         Your browser does not support the video tag.
                     </video>
@@ -282,39 +386,6 @@
                     <video class="print-template-loader-video" playsinline loop muted>
                         <source src="loader.mp4" type="video/mp4">
                     </video>
-                    <!-- <svg
-                       width="3.69cm"
-                       height="3.95cm"
-                       viewBox="-10 -10 125.827 133.386"
-                       version="1.1"
-                       class="svg417"
-                       sodipodi:docname="lexcube-logo.svg"
-                       inkscape:version="1.2.2 (732a01da63, 2022-12-09)"
-                       xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
-                       xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
-                       xmlns="http://www.w3.org/2000/svg"
-                       xmlns:svg="http://www.w3.org/2000/svg">
-                      <defs
-                         id="defs421" />
-                      <path
-                         d="m0 0 26.219-13.754L54.981-.614 28.352 11.355Z"
-                         transform="matrix(1.33333 0 0 -1.33333 17.025 29.723)"
-                         id="logo-top"
-                         inkscape:label="logo-top"
-                         style="fill:#8982b0;fill-opacity:1;fill-rule:nonzero;stroke:none;" />
-                      <path
-                         d="M0 0v32.441l27.449 13.098-1.179-31.305Z"
-                         style="fill:#e8736c;fill-opacity:1;fill-rule:nonzero;stroke:none"
-                         transform="matrix(1.33333 0 0 -1.33333 56.853 99.993)"
-                         id="logo-right"
-                         inkscape:label="logo-right" />
-                      <path
-                         d="m0 0 1.039-30.656 24.07-15.258-.043 32.285z"
-                         style="fill:#435179;fill-opacity:1;fill-rule:nonzero;stroke:none"
-                         transform="matrix(1.33333 0 0 -1.33333 13.645 38.353)"
-                         id="logo-left"
-                         inkscape:label="logo-left" />
-                    </svg>                 -->
                 </div>
                 <div>Building your own data cube...</div>
             </div>
@@ -333,8 +404,17 @@
             </div>
         </div>
     </div>
-
     <script>
+        function collapse(t) {
+            let g = t.nextElementSibling;
+            if (g.style.display == 'none') { 
+                g.style.display = 'block'; 
+                t.textContent = '▼ ' + t.textContent.substring(2); 
+            } else { 
+                g.style.display = 'none';  
+                t.textContent = '► ' + t.textContent.substring(2); 
+            }
+        }
         const b = document.body;
         if (document.URL.indexOf("localhost") != -1) {
             b.getElementsByClassName("tutorial-wrapper")[0].style.display = "none";

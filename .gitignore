@@ -166,3 +166,11 @@ lexcube/nbextension/*.index.*
 lexcube/labextension
 .venv
 .yarn
+docs/source/**/*.glb
+lexcube/nbextension/**/*.glb
+docs/source/**/*.mp4
+lexcube/nbextension/**/*.mp4
+docs/source/**/*.svg
+lexcube/nbextension/**/*.svg
+lexcube/**/*.png
+docs/**/*.png

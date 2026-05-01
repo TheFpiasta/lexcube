@@ -16,354 +16,26 @@
     along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
-import { AmbientLight, BoxGeometry, DataTexture, DataArrayTexture, DirectionalLight, FloatType, Mesh, MeshBasicMaterial, OrthographicCamera, PerspectiveCamera, Raycaster, RedFormat, RGBAFormat, RGBFormat, Scene, ShaderMaterial, Triangle, Vector2, Vector3, WebGLRenderer, Line, BufferGeometry, Object3D, LineBasicMaterial, Frustum, Matrix4, Plane, Box3, LineSegments, Float32BufferAttribute, SphereGeometry, MeshStandardMaterial, CylinderGeometry, AnimationMixer, AnimationClip, NumberKeyframeTrack, KeyframeTrack, InterpolateSmooth, BooleanKeyframeTrack, Clock, AnimationAction, AddEquation, CustomBlending, OneMinusSrcAlphaFactor, SrcAlphaFactor, Color, MaxEquation, OneFactor, MinEquation, AlwaysStencilFunc, ReplaceStencilOp, LoopOnce } from 'three'
-import { clamp, lerp } from 'three/src/math/MathUtils';
+import { AmbientLight, BoxGeometry, DataTexture, DirectionalLight, FloatType, Mesh, MeshBasicMaterial, OrthographicCamera, PerspectiveCamera, Raycaster, RedFormat, RGBAFormat, RGBFormat, Scene, ShaderMaterial, Triangle, Vector2, Vector3, WebGLRenderer, Line, BufferGeometry, Object3D, LineBasicMaterial, Frustum, Matrix4, Plane, Box3, LineSegments, Float32BufferAttribute, SphereGeometry, MeshStandardMaterial, CylinderGeometry, AnimationMixer, AnimationClip, NumberKeyframeTrack, KeyframeTrack, InterpolateSmooth, BooleanKeyframeTrack, Clock, AnimationAction, AddEquation, CustomBlending, OneMinusSrcAlphaFactor, SrcAlphaFactor, Color, MaxEquation, OneFactor, MinEquation, AlwaysStencilFunc, ReplaceStencilOp, GridHelper, Euler, UniformsUtils, BackSide, EdgesGeometry, Ray, IUniform, PCFSoftShadowMap, Event, LoopOnce, MeshPhongMaterial, MathUtils, AxesHelper, PlaneGeometry, DoubleSide, BufferAttribute, AdditiveBlending, LinearFilter, WebGLRenderTarget, NearestFilter, Matrix3, NeverDepth, AlwaysDepth, UnsignedByteType, WebGLArrayRenderTarget, BasicShadowMap, CameraHelper, FrontSide, PCFShadowMap, ClampToEdgeWrapping, GLSL3, RedIntegerFormat, UnsignedIntType } from 'three';
+import { clamp, inverseLerp, lerp } from 'three/src/math/MathUtils';
 import { toPng, toCanvas, getFontEmbedCSS, toBlob } from 'html-to-image';
-import { ArrayBufferTarget as WebmArrayBufferTarget, Muxer as WebmMuxer } from 'webm-muxer'
-import { ArrayBufferTarget as Mp4ArrayBufferTarget, Muxer as Mp4Muxer } from 'mp4-muxer'
-import { COLORMAP_STEPS, CubeFace, DEFAULT_FOV, DEFAULT_WIDGET_HEIGHT, DEFAULT_WIDGET_WIDTH, Dimension, getAddressedFacesOfDimension, getFacesOfIndexDimension, NAN_REPLACEMENT_VALUE, NOT_LOADED_REPLACEMENT_VALUE, range, TILE_SIZE } from './constants';
+import { getVolumeRenderShader } from './rendering/volume-rendering'
+import { COLORMAP_STEPS, CubeFace, DEFAULT_FOV, DEFAULT_WIDGET_HEIGHT, DEFAULT_WIDGET_WIDTH, Dimension, getAddressedFacesOfDimension, getFacesOfIndexDimension, MAXIMUM_SUPPORTED_LOD, FLOAT_NAN_REPLACEMENT_VALUE, FLOAT_NOT_LOADED_REPLACEMENT_VALUE, range, TILE_SIZE_2D, TILE_SIZE_3D, RGB_NOT_LOADED_ALPHA_VALUE, RGB_NAN_ALPHA_VALUE, DataType, PERSPECTIVE_MIN_DISTANCE, PERSPECTIVE_MAX_DISTANCE, ORTHOGRAPHIC_MIN_ZOOM, ORTHOGRAPHIC_MAX_ZOOM, TILES_TEXTURE_NAME, RaycastResultType, saveFloatArrayAsPNG, INVALID_LOD_PLACEHOLDER } from './constants';
+import Stats from 'three/examples/jsm/libs/stats.module'
 import { CubeClientContext } from './client';
-import FastLineSegmentMap from './fast-line-segment-map';
-import { wrap } from 'comlink';
-import { GeoJSONWorkerApi } from './geojson-loader.worker';
-import { Encoder as GifEncoder } from 'modern-gif'
+import { CubeDimensions, CubeSelection, ParameterRange } from './interaction';
+import { FontData, FontLoader } from 'three/examples/jsm/loaders/FontLoader';
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader';
 
-enum RecordingFileFormat {
-    MP4 = 0,
-    WebM = 1,
-    GIF = 2,
-}
+import PinModel from './pin.glb'
+import { Tile2D, Tile3D, Tile3DClipBoundary } from './tiledata';
 
-interface FixedFrameCanvasRecorder {
-    startCapture(log: (...params: any[]) => void, filename: string): void;
-    recordFrame(lastFrame: boolean): Promise<void>;
-    requestFinishCapture(postDownload: () => void): Promise<void>;
-}
+import { MultiBlockRenderPass, TileTextureView2D, TileTextureView3D, TileTextureView2DUpdateResult, TileTextureView3DUpdateResult } from './rendering/tile-texture-views';
+import { RecordingFileFormat, FixedFrameCanvasRecorder, FixedFrameGifCanvasRecorder, FixedFrameVideoEncoderCanvasRecorder } from './rendering/export-recorder';
+import { RegionBorderManager, NaturalEarthRegionBorderResolution, RegionBorderHostState } from './rendering/region-borders';
+import { MaxRangeIndicatorManager } from './rendering/max-range-indicators';
+import { AsyncPickRing } from './rendering/picking';
 
-class FixedFrameGifCanvasRecorder implements FixedFrameCanvasRecorder {
-    private width: number;
-    private height: number;
-    private filename: string = "";
-    private fps: number;
-
-    private canvas: HTMLCanvasElement;
-
-    private htmlParent: HTMLElement;
-    private requestedFinish: boolean;
-    private framesReceived: number;
-    private htmlNodeFilterFunction: ((domNode: HTMLElement) => boolean) | undefined;
-    private fontEmbedCSS: string | undefined;
-    
-    private encoder: GifEncoder;
-    
-    constructor(htmlParent: HTMLElement, canvas: HTMLCanvasElement, filterFunction: (e: HTMLElement) => boolean, recordingFileFormat: RecordingFileFormat, fps: number) {
-        this.requestedFinish = false;
-        this.framesReceived = 0;
-        this.htmlNodeFilterFunction = filterFunction;
-        this.htmlParent = htmlParent;
-        this.fps = fps;
-        this.canvas = canvas.cloneNode() as HTMLCanvasElement;
-
-        const maxSize = 1920 * 1080;
-        if (this.canvas.width * this.canvas.height > maxSize) {
-            const scale = Math.sqrt(maxSize / (this.canvas.width * this.canvas.height));
-            this.canvas.width = Math.round(this.canvas.width * scale);
-            this.canvas.height = Math.round(this.canvas.height * scale);
-        }
-
-        this.width = this.canvas.width;
-        this.height = this.canvas.height;
-
-        this.encoder = new GifEncoder({
-            height: this.height,
-            width: this.width
-        });
-    }
-
-    async startCapture(log: (...params: any[]) => void, filename: string) {
-        this.filename = filename;
-        this.fontEmbedCSS = await getFontEmbedCSS(this.htmlParent);
-    }
-
-    async recordFrame(lastFrame: boolean) {
-        if (this.requestedFinish) {
-            return;
-        }
-        const frameId = this.framesReceived;
-        this.framesReceived += 1;
-    
-        const newCanvas = await toCanvas(this.htmlParent, { "filter": this.htmlNodeFilterFunction, fontEmbedCSS: this.fontEmbedCSS, "style": { backgroundColor: "black" } });
-
-        await this.encoder.encode({ data: newCanvas, delay: 1000 / this.fps });
-        newCanvas.remove();
-    }
-
-    async requestFinishCapture(postDownload: () => void) {
-        this.requestedFinish = true;
-        window.setTimeout(async () => {
-            await this.finishCapture();
-            postDownload();
-        }, 1);
-    }
-
-    private async finishCapture() {
-        const gifBlob = await this.encoder.flush("blob");
-        this.download(gifBlob, this.filename);
-    }
-
-    private download(gifBlob: Blob, filename: string) {
-        const a = document.createElement('a');
-        a.href = URL.createObjectURL(gifBlob);
-        a.download = `${filename}.gif`;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        window.setTimeout(() => {
-            URL.revokeObjectURL(a.href);
-        }, 60000); // revoke video blob after 60 seconds
-    }
-}
-
-// adapted from https://github.com/w3c/mediacapture-record/issues/213#issuecomment-1430325280
-class FixedFrameVideoEncoderCanvasRecorder implements FixedFrameCanvasRecorder {
-    private fps: number;
-    private width: number;
-    private height: number;
-    private bitrate: number;
-    private videoEncoder!: VideoEncoder;
-    private reader!: ReadableStreamDefaultReader<VideoFrame>;
-
-    private webmMuxer!: WebmMuxer<WebmArrayBufferTarget>;
-    private mp4Muxer!: Mp4Muxer<Mp4ArrayBufferTarget>;
-
-    private framesReceived = 0;
-    private framesEncoded: number = 0;
-
-    private webmTarget!: WebmArrayBufferTarget;
-    private mp4Target!: Mp4ArrayBufferTarget;
-
-    private track!: MediaStreamTrack;
-    private canvas!: HTMLCanvasElement;
-    private htmlNodeFilterFunction: (e: HTMLElement) => boolean;
-    private htmlParent: HTMLElement;
-    private requestedFinish: boolean = false;
-
-    private recordingFileFormat: RecordingFileFormat;
-    private fontEmbedCSS: string | undefined;
-
-    private captureFinished: boolean = false;
-    private postDownload: (() => void) | undefined = undefined;
-    
-    private filename: string = "lexcube-animation";
-
-    constructor(htmlParent: HTMLElement, canvas: HTMLCanvasElement, filterFunction: (e: HTMLElement) => boolean, recordingFileFormat: RecordingFileFormat, fps: number) {
-        this.htmlParent = htmlParent;
-        this.canvas = canvas.cloneNode() as HTMLCanvasElement;
-        this.htmlNodeFilterFunction = filterFunction;
-        this.fps = fps;
-        this.recordingFileFormat = recordingFileFormat;
-        // round up width to next even number
-        this.width = Math.ceil(canvas.width / 2) * 2;
-        this.height = Math.ceil(canvas.height / 2) * 2;
-        this.canvas.width = this.width;
-        this.canvas.height = this.height;
-        // calculate bitrate based on resolution
-        this.bitrate = this.width * this.height * 6 * this.fps / 10; // 22.1 Mbs for 1440p
-    }
-  
-    private async finishEncoding() {
-        await this.videoEncoder.flush();
-        this.getMuxer().finalize();
-        try {
-            this.reader.releaseLock();
-        } catch (e) {
-            console.error(e);
-        }
-    }
-
-    private async encodeFrame(frame: VideoFrame, repeatFrame: number = 0) {
-        const keyFrame = this.framesReceived % 10 === 0; // keyframe every 10 frames
-        this.videoEncoder.encode(frame, { keyFrame });
-        if (repeatFrame > 0) {
-            for (let i = 0; i < repeatFrame; i++) {
-                this.videoEncoder.encode(frame, { keyFrame: false });
-            }
-        }
-        frame.close();
-    }
-
-    private getMuxer() {
-        return this.recordingFileFormat == RecordingFileFormat.MP4 ? this.mp4Muxer : this.webmMuxer;
-    }
-
-    async startCapture(log: (...params: any[]) => void, filename: string) {
-        this.filename = filename;
-        this.videoEncoder = new VideoEncoder({
-            output: (chunk, meta) => {
-                this.getMuxer().addVideoChunk(chunk, meta, this.framesEncoded * 1e6 / this.fps);
-                this.framesEncoded += 1;
-                if (this.requestedFinish && this.framesEncoded == this.framesReceived) { // bug: does not consider repeatFrame
-                    this.finishCapture();
-                }
-            },
-            error: (e) => console.error(e),
-        });
-
-
-        const possibleWebmCodecs = new Map<string, string>([['V_AV1', 'av01.0.05M.08'], ['V_VP9', 'vp09.00.10.08'], ['V_VP8', 'vp8']]);
-        const possibleMp4Codecs = new Map<string, string>([['avc', 'avc1.420033'], ['hevc', 'hvc1.1.6.L93.90'], ['vp9', 'vp09.00.10.08'], ['av1', 'av01.0.05M.08']]);
-        const possibleMp4CodecIds = ["avc", "hevc", "vp9", "av1"] as const;
-        let chosenCodecId = "";
-        
-        if (this.recordingFileFormat == RecordingFileFormat.MP4) {
-            log(`[Recording Setup] Testing MP4 codecs`);
-            for (let [codecId, codecString] of possibleMp4Codecs) {
-                const config = {
-                    codec: codecString,
-                    width: this.width,
-                    height: this.height,
-                    bitrate: this.bitrate,
-                    bitrateMode: "constant"
-                };
-        
-                if ((await VideoEncoder.isConfigSupported(config as any)).supported) {
-                    this.videoEncoder.configure(config as any);
-                    chosenCodecId = codecId;
-                    log(`[Recording Setup] Chose codec ${codecId} & MP4`);
-                    break;
-                }
-            }
-        }
-
-        if (this.recordingFileFormat == RecordingFileFormat.WebM) {
-            log("[Recording Setup] Testing WebM codecs");
-            for (let [codecId, codecString] of possibleWebmCodecs) {
-                const config = {
-                    codec: codecString,
-                    width: this.width,
-                    height: this.height,
-                    bitrate: this.bitrate,
-                    bitrateMode: "constant"
-                };
-        
-                if ((await VideoEncoder.isConfigSupported(config as any)).supported) {
-                    this.videoEncoder.configure(config as any);
-                    chosenCodecId = codecId;
-                    log(`[Recording Setup] Chose codec ${codecId} & WebM`);
-                    break;
-                }
-            }
-        }
-
-        if (chosenCodecId == "") {
-            log(`[Recording Setup] No supported codec found`);
-            throw new Error("No supported codec found");
-        }
-        
-        if (this.recordingFileFormat == RecordingFileFormat.MP4) {
-            this.mp4Target = new Mp4ArrayBufferTarget();
-            this.mp4Muxer = new Mp4Muxer({
-                target: this.mp4Target,
-                fastStart: "in-memory",
-                video: {
-                    codec: possibleMp4CodecIds.find((id) => id == chosenCodecId) || "avc",
-                    width: this.width,
-                    height: this.height,
-                    frameRate: this.fps
-                },
-            });
-        } else {
-            this.webmTarget = new WebmArrayBufferTarget();
-            this.webmMuxer = new WebmMuxer({
-                target: this.webmTarget,
-                video: {
-                    codec: chosenCodecId,
-                    width: this.width,
-                    height: this.height,
-                    frameRate: this.fps,
-                },
-            });
-        }
-        
-        this.fontEmbedCSS = await getFontEmbedCSS(this.htmlParent);
-        
-        const ctx = this.canvas.getContext('2d')!;
-        ctx.fillStyle = 'black';
-        ctx.clearRect(0, 0, this.width, this.height);
-
-        this.track = this.canvas.captureStream(0).getVideoTracks()[0];
-        // @ts-expect-error 
-        const mediaProcessor = new MediaStreamTrackProcessor(this.track); // does not work on firefox, oops
-        this.reader = mediaProcessor.readable.getReader();
-
-        // @ts-expect-error
-        this.track.requestFrame(); // fix black frames at start
-        (await this.reader.read()).value?.close(); // flush the first frame
-    }
-
-    async recordFrame(lastFrame: boolean = false) {
-        if (this.requestedFinish) {
-            return;
-        }
-        const frameId = this.framesReceived;
-        this.framesReceived += 1;
-    
-        const newCanvas = await toCanvas(this.htmlParent, { "filter": this.htmlNodeFilterFunction, fontEmbedCSS: this.fontEmbedCSS, "style": { backgroundColor: "black" } });
-        const ctx = this.canvas.getContext('2d')!;
-        ctx.drawImage(newCanvas, 0, 0, this.canvas.width, this.canvas.height);
-        newCanvas.remove();
-        // ctx.fillStyle = 'white';
-        // ctx.font = '50px sans-serif';
-        // ctx.fillText(`Frame ${frameId}`, 10, 50);
-        
-        // @ts-expect-error
-        this.track.requestFrame();
-        const result = await this.reader.read();
-        const frame = result.value;
-        await this.encodeFrame(frame!, lastFrame ? 1 : 0); // encode last frame twice to make sure it's visible - bug: this does not happen when animation is manually stopped
-        frame?.close();
-    }
-
-    private getTarget() {
-        return this.recordingFileFormat == RecordingFileFormat.MP4 ? this.mp4Target : this.webmTarget;
-    }
-
-    private download(filename: string) {
-        const format = this.recordingFileFormat == RecordingFileFormat.MP4 ? "mp4" : "webm";
-        const a = document.createElement('a');
-        const blob = new Blob([this.getTarget().buffer], { type: `video/${format}` });
-        a.href = URL.createObjectURL(blob);
-        a.download = `${filename}.${format}`;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        window.setTimeout(() => {
-            URL.revokeObjectURL(a.href);
-        }, 60000); // revoke video blob after 60 seconds
-    }
-
-    async requestFinishCapture(postDownload: () => void) {
-        this.requestedFinish = true;
-        this.postDownload = postDownload;
-        window.setTimeout(async () => {
-            await this.finishCapture(); // as a safeguard for the race condition going on with receiving vs encoding frames
-        }, 1500);
-    }
-
-
-    private async finishCapture() {
-        if (this.captureFinished) {
-            return;
-        }
-        this.captureFinished = true;
-        if (this.framesEncoded == 0) {
-            return this.postDownload!();
-        }
-        await this.finishEncoding();
-        this.download(this.filename);
-        this.postDownload!();
-    }    
-}
 
 class LabelPositionResult {
     visible: boolean = false;
@@ -373,12 +45,6 @@ class LabelPositionResult {
     angleMinLabel!: number; 
     angleMaxLabel!: number; 
     angleNameLabel!: number; 
-}
-
-enum NaturalEarthRegionBorderResolution {
-    "Highest" = 10,
-    "High" = 50,
-    "Default" = 110,
 }
 
 class Edge {
@@ -433,18 +99,32 @@ class Edge {
 
 class CubeRendering {
     private renderer: WebGLRenderer;
-    mainCamera: OrthographicCamera | PerspectiveCamera;
+    orthographicCamera: OrthographicCamera;
+    perspectiveCamera: PerspectiveCamera;
+
     private scene: Scene;
-    cube: Mesh<BoxGeometry, ShaderMaterial[]>;
+    tile2dFaceRenderedCube: Mesh<BoxGeometry, ShaderMaterial[]>;
+    tile3dVolumeRenderedCube: Mesh<BoxGeometry, ShaderMaterial>;
+    tile3dVolumeRenderedCubePickMaterial: ShaderMaterial;
+
+    private tile2dFaceRenderedCubeTileTextureViews: TileTextureView2D[][] = [];
+    private tile3dVolumeRenderedCubeTileTextureViews: TileTextureView3D[] = [];
+
+    volumeRenderingEnabled: boolean = false;
     
     displayQuality = 1.0;
 
-    private totalSizes: Vector2[];
-    lods: number[];
-    faceVisibility: Array<boolean> = new Array<boolean>(false, false, false, false, false, false);
+    private totalSizes2D: Vector2[];
+    private totalSize3D: Vector3;
+    lods2d: number[];
+    lod3d: number = -1;
+    faceVisibility: Array<boolean> = new Array(6).fill(false);
+
     private faceCurrentPixels: number[] = [0,0,0,0,0,0];
     private rayCaster: Raycaster = new Raycaster();
     private context: CubeClientContext;
+    
+    private orthographicCameraFrustumSize = 3;
     
     private colormapData: Uint8Array;
     renderDebugCubes: boolean;
@@ -454,31 +134,16 @@ class CubeRendering {
 
     private renderRequested: boolean = true;
     
-    private regionBordersTransparency: number = 0.6;
-    private regionBordersFrontMaterial!: LineBasicMaterial;
-    private regionBordersFrontParent!: Object3D;
-    private regionBordersFrontActiveLocalParent!: Object3D;
-    private regionBordersFrontAtDifferentResolutions: Map<NaturalEarthRegionBorderResolution, Object3D> = new Map<NaturalEarthRegionBorderResolution, Object3D>();
-    private currentRegionBorderResolution = 0;
-    private regionBorderResolutionsBeingLoaded = new Set<NaturalEarthRegionBorderResolution>();
-    private regionBorderFrontSegmentMapBins = 10000;
+    private contextLayerParentFront!: Object3D;
+    private contextLayerMarkerMaterial!: MeshPhongMaterial;
+    private contextLayerClipPlanes: Map<CubeFace, Plane> = new Map<CubeFace, Plane>();
+    private contextLayerClipDistanceFromCubeCenter = 0.499; // just a bit inside the cube
+
+    private regionBorders!: RegionBorderManager;
+    private maxRangeIndicators!: MaxRangeIndicatorManager;
 
     private regionBordersDistanceFromCubeCenterInRenderWorld: Vector3;
     private regionBordersDistanceFromCubeCenterOffset: number = 0.001;
-
-    private regionBordersSideMaterial!: LineBasicMaterial;
-    private regionBordersSideParent!: Object3D;
-    
-    private maxRangeIndicatorClippingPlanes: Map<CubeFace, Plane> = new Map<CubeFace, Plane>();
-    
-    private regionBordersSidePlanes: Map<CubeFace, Plane> = new Map<CubeFace, Plane>();
-    private regionBordersSideLines: Map<CubeFace, LineSegments> = new Map<CubeFace, LineSegments>();
-    private regionBordersSideLinesInitialPoolAmount = 200;
-    
-    private lastSideRegionXLeft = 0;
-    private lastSideRegionXRight = 0;
-    private lastSideRegionYTop = 0;
-    private lastSideRegionYBottom = 0;
 
     updateWidgetModelDimensionWrapSettings: (xWrap: boolean, yWrap: boolean, zWrap: boolean) => void = () => {};
 
@@ -486,24 +151,11 @@ class CubeRendering {
     private recordingAnimation: boolean = false;
 
     private htmlClassesOptionalForScreenshots = ["bottom-left-ui", "axis-label-ui", "dataset-info-corner-parent"];
-    private htmlClassesAlwaysInScreenshots = ["corner-logo-ui"];
+    private htmlClassesAlwaysInScreenshots = ["corner-logo-ui", "attribution-banner"];
     private htmlClassesNeverInScreenshots = ["hover-info-ui", "colormap-options"];
     private recordingFileFormat: RecordingFileFormat | null = RecordingFileFormat.MP4;
-    
-    private geoJsonLoaderWorker = new Worker(new URL('./geojson-loader.worker', import.meta.url));
-    private geoJsonLoaderService = wrap<GeoJSONWorkerApi>(this.geoJsonLoaderWorker);
 
     private screenshotFontEmbedCss: string = "";
-    
-    private maxRangeIndicatorParent!: Object3D;
-    private maxRangeIndicatorParentPerFace = new Map<CubeFace, Object3D>();
-    private maxRangeIndicatorMap = new Map<string, Object3D>();
-
-    private maxRangeIndicatorAnimationMixers: AnimationMixer[] = [];
-    private maxRangeIndicatorAnimationActions: AnimationAction[] = [];
-    private maxRangeIndicatorAnimationsPlaying = false;
-
-    private animationClock: Clock = new Clock();
 
     private lastLabelEdges: (Edge | undefined)[] = [undefined, undefined, undefined];
 
@@ -518,47 +170,99 @@ class CubeRendering {
     private widgetModeWidth = DEFAULT_WIDGET_WIDTH;
     private widgetModeHeight = DEFAULT_WIDGET_HEIGHT;
 
+    private outlineCubeForVolumeRendering: LineSegments<EdgesGeometry<BoxGeometry>, LineBasicMaterial>;
+    private frontLight: DirectionalLight;
+
+    private volumeRenderingThresholdSign = -1; // -1 = show all values less than X, 1 = show all values greater than X
+    private volumeRenderingRenderStyle: number = 0;
+    private volumeRenderingQuantileThreshold: number = 1.0;
+    private volumeRenderingAbsoluteThreshold: number = 1.0;
+    private volumeRenderingRangeLowerThreshold: number = 0.0;
+    private volumeRenderingRangeUpperThreshold: number = 1.0;
+
+    private volumeRenderingUseQuantileOverAbsoluteThreshold: boolean = false;
+
+    // private statsPanel: Stats;
+    private volumeRenderingFloor!: Mesh;
+    private maxTextureSize2D: number;
+
+    private pickRing3d: AsyncPickRing;
+    private pending3dPick: boolean = false;
+    private pending3dPickMousePosition: Vector2 = new Vector2();
+    private readonly cube3dPickRenderLayer = 1;
+   
     constructor(context: CubeClientContext, parent: HTMLElement) {
         this.context = context;
         this.parent = parent;
         this.colormapData = new Uint8Array(COLORMAP_STEPS * 4);
         this.colormapData.fill(128);
 
-        this.totalSizes = new Array<Vector2>();
-        this.lods = new Array<number>();
+        this.totalSizes2D = new Array<Vector2>();
+        this.totalSize3D = new Vector3();
+        this.lods2d = new Array<number>();
 
-        this.scene = new Scene()
-            
-        if (context.isometricMode) {
-            this.mainCamera = new OrthographicCamera(-2, 2, 2, -2, 0.1, 100);
-            this.mainCamera.position.setFromSphericalCoords( 
-                4, 
-                Math.PI / 3, // 60 degrees from positive Y-axis and 30 degrees to XZ-plane
-                Math.PI / 4  // 45 degrees, between positive X and Z axes, thus on XZ-plane
-            );
-            this.updateOrthographicCamera();
-        } else {
-            let fov = DEFAULT_FOV;
-            const matchFov = document.URL.match(/fov=(\d+\.?\d*)/);
-            if (matchFov && matchFov.length > 0) {
-                fov = parseInt(matchFov[1]);
-            }
-            this.mainCamera = new PerspectiveCamera(fov, this.getWidth() / this.getHeight(), 0.01, 10);
+        this.scene = new Scene();
+
+        // set up isometric camera
+        const aspect = this.getWidth() / this.getHeight();
+        this.orthographicCamera = new OrthographicCamera(this.orthographicCameraFrustumSize * aspect / - 2, this.orthographicCameraFrustumSize * aspect / 2, this.orthographicCameraFrustumSize / 2, this.orthographicCameraFrustumSize / - 2, 0.01, 10);
+        
+        this.orthographicCamera.lookAt(0, 0, 0);
+        this.orthographicCamera.zoom = 0.5;
+        this.orthographicCamera.position.set(1, 1, 1).setLength(2.5);
+        // this.orthographicCamera.updateProjectionMatrix();
+
+        // this.scene.add(this.orthographicCamera);
+
+        // set up perspective camera
+        let fov = 30;
+        const matchFov = document.URL.match(/fov=(\d+\.?\d*)/);
+        if (matchFov && matchFov.length > 0) {
+            fov = parseInt(matchFov[1]);
         }
-    
-        const frontLight = new DirectionalLight("white", 0.4)
-        frontLight.position.set(1.0, 1.4, -0.7)
-    
-        const backLight = new DirectionalLight("white", 0.4)
-        backLight.position.set(-1.0, 1.4, 0.7)
-    
-        const ambientLight = new AmbientLight("white", 0.6);
+        this.perspectiveCamera = new PerspectiveCamera(fov, this.getWidth() / this.getHeight(), 0.01, 100);
+        // this.scene.add(this.perspectiveCamera);
+
+        
+
+        this.frontLight = new DirectionalLight("white", 1.0);
+        this.frontLight.position.set(0.2, 1.4, -0.4);
+        this.frontLight.target.position.set(0, 0, 0);
+        this.frontLight.target.updateMatrixWorld();
+        this.frontLight.castShadow = true;
+        this.frontLight.shadow.mapSize.width = 2048;
+        this.frontLight.shadow.mapSize.height = 2048;
+        // this.frontLight.shadow.radius = 4;
+        this.frontLight.shadow.bias = -0.0001;
+        this.frontLight.shadow.camera.near = 0.7;
+        this.frontLight.shadow.camera.far = 2.4;
+        this.frontLight.shadow.camera.left = -1;
+        this.frontLight.shadow.camera.right = 1;
+        this.frontLight.shadow.camera.top = 1;
+        this.frontLight.shadow.camera.bottom = -1;
+        this.frontLight.shadow.camera.updateMatrixWorld(true);
+
+        // const helper = new CameraHelper(this.frontLight.shadow.camera);
+        // this.scene.add(helper);
+
+
+        // const backLight = new DirectionalLight("white", 0.4);
+        // backLight.position.set(-1.0, 1.4, 0.7);
+
+        const ambientLight = new AmbientLight("white", 0.5);
     
         this.renderer = new WebGLRenderer({ 
             antialias: true, 
             alpha: this.context.studioMode || this.context.widgetMode,
-            preserveDrawingBuffer: true 
+            preserveDrawingBuffer: true
         });
+
+        this.maxTextureSize2D = this.renderer.getContext().getParameter(this.renderer.getContext().MAX_TEXTURE_SIZE);
+
+        this.renderer.shadowMap.enabled = true;
+        this.renderer.shadowMap.type = PCFShadowMap;
+        this.renderer.shadowMap.autoUpdate = false;
+        this.renderer.shadowMap.needsUpdate = true;
         this.renderer.setSize(this.getWidth(), this.getHeight());
         this.renderer.setPixelRatio(window.devicePixelRatio);
         // this.renderer.setClearColor(new Color("#000000"), 0);
@@ -566,14 +270,63 @@ class CubeRendering {
 
         window.addEventListener('resize', this.onWindowResize.bind(this), false)
 
+        // this.statsPanel = new Stats();
+        // this.statsPanel.showPanel(1); // 0: fps, 1: ms, 2: mb, 3+: custom
+        // if (this.context.debugMode) {
+        //     document.body.appendChild(this.statsPanel.dom);
+        // }
+        
+        this.pickRing3d = new AsyncPickRing(this.renderer, () => this.renderPickPass());         
+        
         const scale = this.getCubeScaleInRenderWorld();
         const cubeGeometry = new BoxGeometry(scale.x, scale.y, scale.z);
+        const cube3DGeometry = new BoxGeometry(scale.x, scale.y, scale.z);      
+
         this.regionBordersDistanceFromCubeCenterInRenderWorld = scale.clone().multiplyScalar(0.5).addScalar(this.regionBordersDistanceFromCubeCenterOffset); // just a bit in front of the cube, based on its scale
 
         const materials = Array.from({ length: 6 }, () => this.newCubeMaterial());
-        this.cube = new Mesh(cubeGeometry, materials);
+        this.tile2dFaceRenderedCube = new Mesh(cubeGeometry, materials);
+        this.tile2dFaceRenderedCube.userData = { isCube: true }; // for raycasting identification
+
+        this.tile3dVolumeRenderedCube = new Mesh(cube3DGeometry, this.newCubeMaterial3D());
+        this.tile3dVolumeRenderedCube.userData = { isCube: true }; // for raycasting identification
+        this.tile3dVolumeRenderedCube.layers.toggle(this.cube3dPickRenderLayer);
+        
+        this.blockBasedVolumeRenderingImposterBillboardsParent = new Object3D();
+        this.scene.add(this.blockBasedVolumeRenderingImposterBillboardsParent);
+
+        // for debugging, for now
+        // const hintCube = new Mesh(new BoxGeometry(1, 1, 1), new MeshBasicMaterial({ color: "white", wireframe: true, opacity: 0.1, transparent: true }));
+        // this.blockBasedVolumeRenderingIntermediateScene.add(hintCube);
+
+        this.tile2dFaceRenderedCube.castShadow = true;
+        this.tile3dVolumeRenderedCube.castShadow = true;
+        this.tile3dVolumeRenderedCube.customDepthMaterial = this.newCubeMaterial3D(false, this.tile3dVolumeRenderedCube.material.uniforms, true);
+        this.tile3dVolumeRenderedCubePickMaterial = this.newCubeMaterial3D(false, this.tile3dVolumeRenderedCube.material.uniforms, false, true);
+
+        // draw debug cube for 3D cube
+        const edgesGeometry = new EdgesGeometry(cube3DGeometry);
+        this.outlineCubeForVolumeRendering = new LineSegments(edgesGeometry, new LineBasicMaterial({ color: "white" }));
+        this.scene.add(this.outlineCubeForVolumeRendering);
+
+        // new grid helper
+        const grid = new GridHelper( 6, 6, 0xffffff, 0xffffff );
+        // this.scene.add( grid );
     
-        this.setCubeLightingEnabled();
+        const floorGeometry = new BoxGeometry(1.6, 0.001, 1.6);
+        const floorMaterial = new MeshStandardMaterial({ color: "#6f6f6f", roughness: 1.0, metalness: 0.0 });
+        this.volumeRenderingFloor = new Mesh(floorGeometry, floorMaterial);
+        this.volumeRenderingFloor.position.set(0, -0.509, 0);
+        this.volumeRenderingFloor.position.multiply(this.getCubeScaleInRenderWorld());
+        this.volumeRenderingFloor.receiveShadow = true;
+
+        this.scene.add(this.volumeRenderingFloor);
+        
+        // const hintCube = new Mesh(new BoxGeometry(0.3, 0.3, 0.3), new MeshBasicMaterial({ color: "white" }));
+        // this.scene.add(hintCube);
+        // hintCube.castShadow = true;
+        
+        this.set2dCubeLightingEnabled();
     
         this.renderDebugCubes = false;
         this.debugCubes = [];
@@ -585,8 +338,8 @@ class CubeRendering {
             }
         }
     
-        // fix cube UVs
-        var uvAttributes = this.cube.geometry.attributes.uv;
+        // fix 2D cube UVs
+        var uvAttributes = this.tile2dFaceRenderedCube.geometry.attributes.uv;
         for (let face = 0; face < 6; face++) {
             const offset = face * 4;
     
@@ -622,17 +375,49 @@ class CubeRendering {
                 uvAttributes.setXY(offset + 3, 1, 1); // bottom right
             }
         }
-    
-        this.scene.add(this.cube);
-        this.scene.add(frontLight);
-        this.scene.add(backLight);
-        this.scene.add(ambientLight);
-        this.createRegionBorders();
 
-        this.createMaxRangeIndicators();
+        this.tile2dFaceRenderedCube.visible = false;
+        this.tile3dVolumeRenderedCube.visible = false;
+    
+        this.scene.add(this.tile2dFaceRenderedCube);
+        this.scene.add(this.tile3dVolumeRenderedCube);
+        this.scene.add(this.frontLight);
+        // this.scene.add(backLight);
+        this.scene.add(ambientLight);
+
+        // Initialize region borders manager
+        const regionBorderHost: RegionBorderHostState = {
+            get faceVisibility() { return self.faceVisibility; },
+            get dimensionOverflow() { return self.dimensionOverflow; },
+            get printTemplateDownloading() { return self.printTemplateDownloading; },
+            get printTemplateJustDownloaded() { return self.printTemplateJustDownloaded; },
+            get getCubeScaleInRenderWorld() { return () => self.getCubeScaleInRenderWorld(); },
+            requestRender: () => self.requestRender(),
+        };
+        const self = this;
+        this.regionBorders = new RegionBorderManager(context, this.scene, this.renderer, regionBorderHost);
+
+        this.contextLayerClipPlanes.set(CubeFace.Top, new Plane(new Vector3(0, 1, 0), this.contextLayerClipDistanceFromCubeCenter));
+        this.contextLayerClipPlanes.set(CubeFace.Bottom, new Plane(new Vector3(0, -1, 0), this.contextLayerClipDistanceFromCubeCenter));
+        this.contextLayerClipPlanes.set(CubeFace.Left, new Plane(new Vector3(0, 0, 1), this.contextLayerClipDistanceFromCubeCenter));
+        this.contextLayerClipPlanes.set(CubeFace.Right, new Plane(new Vector3(0, 0, -1), this.contextLayerClipDistanceFromCubeCenter));
+
+        this.contextLayerMarkerMaterial = new MeshPhongMaterial({
+            color: "white",
+            // transparent: true,
+            // opacity: 1,
+            clippingPlanes: Array.from(this.contextLayerClipPlanes.values())
+        });
+
+        this.contextLayerParentFront = new Object3D();
+        this.scene.add(this.contextLayerParentFront);
+
+        // Initialize max range indicators manager
+        this.maxRangeIndicators = new MaxRangeIndicatorManager(this.scene, () => this.requestRender(), this.getCubeScaleInRenderWorld());
+        this.maxRangeIndicators.create();
         
         (window as any)["saveCameraPreset"] = () => {
-            const s = `{ position: new Vector3(${this.mainCamera.position.x}, ${this.mainCamera.position.y}, ${this.mainCamera.position.z}), rotation: new Euler(${this.mainCamera.rotation.x}, ${this.mainCamera.rotation.y}, ${this.mainCamera.rotation.z}) },`
+            const s = `{ position: new Vector3(${this.getCurrentCamera().position.x}, ${this.getCurrentCamera().position.y}, ${this.getCurrentCamera().position.z}), rotation: new Euler(${this.getCurrentCamera().rotation.x}, ${this.getCurrentCamera().rotation.y}, ${this.getCurrentCamera().rotation.z}) },`
             console.log(s)
         }
     }
@@ -641,615 +426,133 @@ class CubeRendering {
         return new Vector3(this.context.cubeScale[2], this.context.cubeScale[1], this.context.cubeScale[0]);
     }
 
-    private createMaxRangeIndicators() {
-        const color = 0xffffff;
-        const indicatorWidth = 0.0075;
-        const indicatorLength = this.getCubeScaleInRenderWorld().addScalar(indicatorWidth);
-        const indicatorDistance = this.getCubeScaleInRenderWorld().multiplyScalar(0.5).addScalar(indicatorWidth / 2 + 0.0015); // some padding for clipping
-
-        this.maxRangeIndicatorClippingPlanes.set(CubeFace.Front, new Plane(new Vector3(1, 0, 0), indicatorDistance.x));
-        this.maxRangeIndicatorClippingPlanes.set(CubeFace.Back, new Plane(new Vector3(-1, 0, 0), indicatorDistance.x));
-        this.maxRangeIndicatorClippingPlanes.set(CubeFace.Top, new Plane(new Vector3(0, 1, 0), indicatorDistance.y));
-        this.maxRangeIndicatorClippingPlanes.set(CubeFace.Bottom, new Plane(new Vector3(0, -1, 0), indicatorDistance.y));
-        this.maxRangeIndicatorClippingPlanes.set(CubeFace.Left, new Plane(new Vector3(0, 0, 1), indicatorDistance.z));
-        this.maxRangeIndicatorClippingPlanes.set(CubeFace.Right, new Plane(new Vector3(0, 0, -1), indicatorDistance.z));
-
-        const opacityAnimationTimePoints = [0, 0.8, 1.0]; // Time in seconds
-        const opacityAnimationValues = [1.0, 0.3, 0]; // Opacity values at each time point
-        const visibilityAnimationValues = [true, true, false]; // Visibility values at each time point
-        
-        this.maxRangeIndicatorParent = new Object3D();
-        this.scene.add(this.maxRangeIndicatorParent);
-
-        for (let face = 0; face < 6; face++) {            
-            const p = new Object3D();
-            this.maxRangeIndicatorParent.add(p);
-            this.maxRangeIndicatorParentPerFace.set(face, p);
-        }
-
-        // Define keyframes for opacity animation
-        const opacityKF = new NumberKeyframeTrack('.material.opacity', opacityAnimationTimePoints, opacityAnimationValues, InterpolateSmooth);
-        const visibleKF = new BooleanKeyframeTrack('.visible', opacityAnimationTimePoints, visibilityAnimationValues);
-
-        // Create an animation clip
-        const clip = new AnimationClip("flash-and-fade", -1, [opacityKF, visibleKF]);
-        
-        const makeMesh = (id: string, length: number) => {
-            const boxGeometry = new BoxGeometry(indicatorWidth, length, indicatorWidth);
-            const material = new MeshBasicMaterial({ 
-                color: color, 
-                transparent: true, 
-                depthTest: false, 
-                clippingPlanes: Array.from(this.maxRangeIndicatorClippingPlanes.values()),
-            });
-            const mesh = new Mesh(boxGeometry, material);
-            mesh.visible = false;
-
-            // Set up an AnimationMixer and play the clip
-            const mixer = new AnimationMixer(mesh);
-            const action = mixer.clipAction(clip, mesh);
-            action.setLoop(LoopOnce, 1);
-
-            this.maxRangeIndicatorAnimationMixers.push(mixer);
-            this.maxRangeIndicatorAnimationActions.push(action);
-
-            mesh.userData.mixer = mixer;
-            mesh.userData.action = action;
-            mesh.userData.dimension = Dimension[id.split("-")[2].toUpperCase() as keyof typeof Dimension];
-
-            const faceStr = id.split("-")[0];
-            const face = CubeFace[faceStr.toUpperCase()[0] + faceStr.slice(1) as keyof typeof CubeFace];
-            this.maxRangeIndicatorParentPerFace.get(face)!.add(mesh);
-            this.maxRangeIndicatorMap.set(id, mesh);
-            return mesh;
-        }
-
-        // Left to right, in default view
-        const createIndicatorZ = (x: number, y: number, id: string) => {
-            const mesh = makeMesh(id, indicatorLength.z);
-            mesh.rotation.set(Math.PI / 2, 0, 0);
-            mesh.position.set(x, y, 0);
-        }
-
-        // Down to up, in default view
-        const createIndicatorY = (x: number, z: number, id: string) => {
-            const mesh = makeMesh(id, indicatorLength.y);
-            mesh.position.set(x, 0, z);
-        }
-
-        // Front to back, in default view
-        const createIndicatorX = (y: number, z: number, id: string) => {
-            const mesh = makeMesh(id, indicatorLength.x);
-            mesh.position.set(0, y, z);
-            mesh.rotation.set(0, 0, Math.PI / 2);
-        }
-        
-        const o = this.getCubeScaleInRenderWorld().multiplyScalar(0.5);
-
-        createIndicatorZ(o.x, o.y, "front-min-y");
-        createIndicatorZ(o.x, -o.y, "front-max-y");
-        createIndicatorZ(-o.x, o.y, "back-min-y");
-        createIndicatorZ(-o.x, -o.y, "back-max-y");
-                
-        createIndicatorY(o.x, o.z, "left-max-y");
-        createIndicatorY(o.x, -o.z, "right-max-y");
-        createIndicatorY(-o.x, o.z, "left-min-y");
-        createIndicatorY(-o.x, -o.z, "right-min-y");
-        
-        createIndicatorX(o.y, o.z, "top-min-x");
-        createIndicatorX(o.y, -o.z, "top-max-x");
-        createIndicatorX(-o.y, o.z, "bottom-min-x");
-        createIndicatorX(-o.y, -o.z, "bottom-max-x");
-        
-        createIndicatorZ(o.x, o.y, "top-max-y");
-        createIndicatorZ(o.x, -o.y, "bottom-max-y");
-        createIndicatorZ(-o.x, o.y, "top-min-y");
-        createIndicatorZ(-o.x, -o.y, "bottom-min-y");
-                
-        createIndicatorY(o.x, o.z, "front-min-x");
-        createIndicatorY(o.x, -o.z, "front-max-x");
-        createIndicatorY(-o.x, o.z, "back-min-x");
-        createIndicatorY(-o.x, -o.z, "back-max-x");
-        
-        createIndicatorX(o.y, o.z, "left-min-x");
-        createIndicatorX(o.y, -o.z, "right-min-x");
-        createIndicatorX(-o.y, o.z, "left-max-x");
-        createIndicatorX(-o.y, -o.z, "right-max-x");
-    }
-
-    private updateMaxRangeIndicatorPositionAndScale() {
-        for (let face = 0; face < 6; face++) {
-            const faceParent = this.maxRangeIndicatorParentPerFace.get(face)!;
-            const currentSize = this.context.interaction.cubeSelection.getSizeVector(face);
-            const currentOffset = this.context.interaction.cubeSelection.getOffsetVector(face);
-            
-            const xParameterRange = this.context.interaction.cubeDimensions.xParameterRangeForFace(face);
-            const yParameterRange = this.context.interaction.cubeDimensions.yParameterRangeForFace(face);
-
-            const worldSize = new Vector2(xParameterRange.length(), yParameterRange.length());
-            const worldOffset = new Vector2(xParameterRange.min, yParameterRange.min);
-            const globalCenterPoint = worldSize.clone().divideScalar(2).add(worldOffset);
-            const currentCenterPoint = currentSize.clone().divideScalar(2).add(currentOffset); 
-            
-            const zoomRelativeToWorld = new Vector2().copy(worldSize).divide(currentSize);
-            const cubeScale = this.getCubeScaleInRenderWorld();
-            
-            if (face == CubeFace.Front || face == CubeFace.Back) {
-                // mapping: local x is global -z, local y is global -y
-                faceParent.scale.set(1.0, zoomRelativeToWorld.y, zoomRelativeToWorld.x);
-                faceParent.position.setY(cubeScale.y * zoomRelativeToWorld.y * (currentCenterPoint.y - globalCenterPoint.y) / worldSize.y);
-                faceParent.position.setZ(cubeScale.z * zoomRelativeToWorld.x * (currentCenterPoint.x - globalCenterPoint.x) / worldSize.x);
-                
-                 for (let mesh of faceParent.children) {
-                     if (mesh.userData.dimension == Dimension.X) {
-                        mesh.scale.set(1.0, 1.0, 1.0 / zoomRelativeToWorld.x);
-                     } else {
-                        mesh.scale.set(1.0, this.dimensionOverflow[Dimension.X] ? 3.0 : 1.0, 1.0 / zoomRelativeToWorld.y);
-                     }
-                 }
-            } else if (face == CubeFace.Top || face == CubeFace.Bottom) {
-                // local x is global -z, local y is global +x!
-                faceParent.scale.set(zoomRelativeToWorld.y, 1.0, zoomRelativeToWorld.x);
-                faceParent.position.setX(cubeScale.x * -zoomRelativeToWorld.y * (currentCenterPoint.y - globalCenterPoint.y) / worldSize.y);
-                faceParent.position.setZ(cubeScale.z * zoomRelativeToWorld.x * (currentCenterPoint.x - globalCenterPoint.x) / worldSize.x);
-                
-                for (let mesh of faceParent.children) {
-                    if (mesh.userData.dimension == Dimension.X) {
-                        mesh.scale.set(1.0, 1.0, 1.0 / zoomRelativeToWorld.x);
-                    } else {
-                        mesh.scale.set(1.0 / zoomRelativeToWorld.y, this.dimensionOverflow[Dimension.X] ? 3.0 : 1.0, 1.0);
-                    }
-                }
-            } else {
-                // local x is global -y, local y is global +x!
-                faceParent.scale.set(zoomRelativeToWorld.y, zoomRelativeToWorld.x, 1.0);
-                faceParent.position.setX(cubeScale.x * -zoomRelativeToWorld.y * (currentCenterPoint.y - globalCenterPoint.y) / worldSize.y);
-                faceParent.position.setY(cubeScale.y * zoomRelativeToWorld.x * (currentCenterPoint.x - globalCenterPoint.x) / worldSize.x);
-                
-                for (let mesh of faceParent.children) {
-                    if (mesh.userData.dimension == Dimension.X) {
-                        mesh.scale.set(1.0 / zoomRelativeToWorld.x, 1.0, 1.0);
-                    } else {
-                        mesh.scale.set(1.0 / zoomRelativeToWorld.y, 1.0, 1.0);
-                    }
-                }
-            }
-        }
-    }
-
     showAllMaxRangeIndicators() {
-        for (let face = 0; face < 6; face++) {
-            this.showMaxRangeIndicator(face, Dimension.X, true);
-            this.showMaxRangeIndicator(face, Dimension.X, false);
-            this.showMaxRangeIndicator(face, Dimension.Y, true);
-            this.showMaxRangeIndicator(face, Dimension.Y, false);
-        }
+        this.maxRangeIndicators.showAll();
     }
 
     showMaxRangeIndicator(face: CubeFace, dimension: Dimension, min: boolean) {
-        const id = `${CubeFace[face].toLowerCase()}-${min ? "min" : "max"}-${Dimension[dimension].toLowerCase()}`;
-        const mesh = this.maxRangeIndicatorMap.get(id);
-        if (mesh) {
-            mesh.userData.activeFace = face;
-            mesh.userData.action.reset();
-            mesh.userData.action.play();
-            this.maxRangeIndicatorAnimationsPlaying = true;
-            this.requestRender();
-        } else {
-            console.error(`Max range indicator with id ${id} not found`);
-        }
-    }
-
-    private createRegionBordersSideLinePositions(face: CubeFace, lineAmount: number) {
-        const y = face == CubeFace.Top ? this.regionBordersDistanceFromCubeCenterInRenderWorld.y : face == CubeFace.Bottom ? -this.regionBordersDistanceFromCubeCenterInRenderWorld.y : 0;
-        const z = face == CubeFace.Left ? this.regionBordersDistanceFromCubeCenterInRenderWorld.z : face == CubeFace.Right ? -this.regionBordersDistanceFromCubeCenterInRenderWorld.z : 0;
-        const positions: number[] = range(0, lineAmount * 6 - 1).map((i) => i % 3 == 0 ? (((Math.floor(i / 3) % 2 == 0) ? -this.regionBordersDistanceFromCubeCenterInRenderWorld.x : this.regionBordersDistanceFromCubeCenterInRenderWorld.x)) : (i % 3 == 1 ? y : z));
-        return positions;
-    }
-
-    private createRegionBordersSideLines(face: CubeFace)  {
-        const indices: number[] = [0,1];
-        const positions = this.createRegionBordersSideLinePositions(face, this.regionBordersSideLinesInitialPoolAmount);
-        const geometry = new BufferGeometry();
-        geometry.setIndex(indices);
-        geometry.setAttribute('position', new Float32BufferAttribute(positions, 3));
-        geometry.computeBoundingSphere();
-
-        const lineSegments = new LineSegments(geometry, this.regionBordersSideMaterial);
-        lineSegments.visible = false;
-        return lineSegments;
-    };
-    
-    private createRegionBorders() {
-        this.regionBordersSidePlanes.set(CubeFace.Top, new Plane(new Vector3(0, 1, 0), this.regionBordersDistanceFromCubeCenterInRenderWorld.y));
-        this.regionBordersSidePlanes.set(CubeFace.Bottom, new Plane(new Vector3(0, -1, 0), this.regionBordersDistanceFromCubeCenterInRenderWorld.y));
-        this.regionBordersSidePlanes.set(CubeFace.Left, new Plane(new Vector3(0, 0, 1), this.regionBordersDistanceFromCubeCenterInRenderWorld.z));
-        this.regionBordersSidePlanes.set(CubeFace.Right, new Plane(new Vector3(0, 0, -1), this.regionBordersDistanceFromCubeCenterInRenderWorld.z));
-
-        this.regionBordersSideParent = new Object3D();
-        this.scene.add(this.regionBordersSideParent);
-
-        this.regionBordersFrontMaterial = new LineBasicMaterial( { 
-            linewidth: 1,
-            transparent: true,
-            color: 0x000000,
-            opacity: this.regionBordersTransparency,
-            clippingPlanes: Array.from(this.regionBordersSidePlanes.values())
-        });
-
-        this.regionBordersSideMaterial = new LineBasicMaterial( {
-            linewidth: 1,
-            color: 0x000000,
-            transparent: true,
-            opacity: this.regionBordersTransparency,
-        });
-
-        for (let face of [CubeFace.Top, CubeFace.Bottom, CubeFace.Left, CubeFace.Right]) {
-            const lines = this.createRegionBordersSideLines(face);
-            this.regionBordersSideLines.set(face, lines);
-            this.regionBordersSideParent.add(lines);
-        }
-        
-        this.regionBordersFrontParent = new Object3D();
-        this.scene.add(this.regionBordersFrontParent);
-        this.renderer.localClippingEnabled = true;
+        this.maxRangeIndicators.show(face, dimension, min);
     }
 
     loadRegionBordersFromGeoJsonForWidget(geojson: any, color: string = "") {
-        this.context.log("Loading GeoJSON for widget", geojson);
-        this.loadRegionBorders(NaturalEarthRegionBorderResolution.Default, geojson);
-        if (color) {
-            this.setRegionBordersColor(color);
-        }
+        this.regionBorders.loadFromGeoJsonForWidget(geojson, color);
     }
 
     clearRegionBordersForWidget() {
-        this.clearRegionBorders();
+        this.regionBorders.clearForWidget();
     }
 
     setRegionBordersColor(color: string) {
-        this.regionBordersFrontMaterial.color.set(color);
-        this.regionBordersSideMaterial.color.set(color);
-        this.regionBordersFrontMaterial.needsUpdate = true;
-        this.regionBordersSideMaterial.needsUpdate = true;
-        this.requestRender();
+        this.regionBorders.setColor(color);
     }
 
-    private regionBordersJustLoaded = false;
-
-    private async loadRegionBorders(newResolution: NaturalEarthRegionBorderResolution = NaturalEarthRegionBorderResolution.Default, geojson: any = null) {
-        this.regionBordersJustLoaded = true;
-        if (this.context.widgetMode) {
-            this.clearRegionBorders();
-            const localParent = await this.loadRegionBordersFromGeoJson(geojson);
-            this.regionBordersFrontActiveLocalParent = localParent!;
-        } else {
-            await this.loadRegionBordersFromNaturalEarth(newResolution);
-        }
-        this.updateRegionBorderPositionAndResolution();
-        this.requestRender();
-        this.regionBordersJustLoaded = false;
-    }
-
-    private async loadRegionBordersFromNaturalEarth(targetResolution: NaturalEarthRegionBorderResolution) {
-        if (this.regionBordersFrontAtDifferentResolutions.has(targetResolution)) {
-            this.context.log(`Region borders at resolution ${targetResolution} already loaded, making them visible`);
-            const localParent = this.regionBordersFrontAtDifferentResolutions.get(targetResolution)!;
-            localParent.visible = true;
-            this.regionBordersFrontActiveLocalParent = localParent;
-        } else {
-            if (this.regionBorderResolutionsBeingLoaded.size > 0) {
-                return false;
-            }
-            this.regionBorderResolutionsBeingLoaded.add(targetResolution);
-            const localParent = await this.loadRegionBordersFromGeoJson(this.context.networking.getFetchUrl(`/ne_${targetResolution}m_admin_0_countries.geojson`));
-            this.regionBordersFrontAtDifferentResolutions.set(targetResolution, localParent!);
-            this.regionBorderResolutionsBeingLoaded.delete(targetResolution);
-            this.regionBordersFrontActiveLocalParent = localParent!;
-        }
-        this.currentRegionBorderResolution = targetResolution;
-        this.regionBordersFrontAtDifferentResolutions.forEach((localParent, resolution) => {
-            if (resolution != targetResolution) {
-                this.context.log(`Hiding region borders at resolution ${resolution}`);
-                localParent.visible = false;
-            }
-        });
-        return true;
-    }
-
-    private async clearRegionBorders() {
-        this.regionBordersFrontParent.children.forEach((child: Object3D) => {
-            if (child instanceof LineSegments) {
-                child.geometry.dispose();
-            }
-        });
-        this.regionBordersFrontParent.remove(...this.regionBordersFrontParent.children);
-    }
-
-    private async loadRegionBordersFromGeoJson(geoJsonOrUrl: any) {
-        if (!this.regionBordersFrontParent) {
-            console.error("Region borders parent not initialized");
-            return;
-        }
-        
-        const { indices, positions, lineSegmentMapY, lineSegmentMapZ } = await this.geoJsonLoaderService.parseGeoJSON(geoJsonOrUrl, this.regionBorderFrontSegmentMapBins);
-        const geometry = new BufferGeometry();
-        geometry.setIndex(indices);
-        geometry.setAttribute('position', new Float32BufferAttribute(positions, 3));
-        geometry.computeBoundingSphere();
-
-        const lineSegments = new LineSegments(geometry, this.regionBordersFrontMaterial);
-        const lineParent = new Object3D();
-        const lineParentOverflow = new Object3D(); 
-        lineParent.add(lineSegments);
-        
-        const localParent = new Object3D();
-        localParent.add(lineParent);
-        localParent.add(lineParentOverflow);
-        localParent.userData = {
-            lineSegmentMapZ: FastLineSegmentMap.fromObject(lineSegmentMapZ),
-            lineSegmentMapY: FastLineSegmentMap.fromObject(lineSegmentMapY),
-            overflowActive: false,
-            activateOverflow: () => {
-                if (localParent.userData.overflowActive) {
-                    return;
-                }
-                localParent.userData.overflowActive = true;
-                this.context.log("Activating overflow for region borders");
-                lineParentOverflow.add(lineSegments.clone());
-            }
-        };
-
-        this.regionBordersFrontParent.add(localParent);
-        return localParent;
-    }
-
-    private updateSideRegionBorders(xLeft: number, xRight: number, yTop: number, yBottom: number, worldSizeX: number) {
-        if (!this.regionBordersFrontActiveLocalParent) {
-            return;
-        }
-
-        const faceChanged = [
-            this.lastSideRegionYTop != yTop, // top 2
-            this.lastSideRegionYBottom != yBottom, // bottom 3
-            this.lastSideRegionXLeft != xLeft, // left 4
-            this.lastSideRegionXRight != xRight  // right 5
-        ];
-
-        faceChanged[0] = faceChanged[0] || faceChanged[2] || faceChanged[3]; // top face is influenced by top, left, and right, but NOT bottom
-        faceChanged[1] = faceChanged[1] || faceChanged[2] || faceChanged[3]; // bottom face is influenced by bottom, left, and right, but NOT top
-        faceChanged[2] = faceChanged[2] || faceChanged[0] || faceChanged[1]; // left face is influenced by left, top, and bottom, but NOT right
-        faceChanged[3] = faceChanged[3] || faceChanged[0] || faceChanged[1]; // right face is influenced by right, top, and bottom, but NOT left
-        
-        const refreshEverything = this.printTemplateDownloading || this.printTemplateJustDownloaded;
-        const skipCubeOffset = this.printTemplateDownloading;
-
-        const frontLineSegments = this.regionBordersFrontActiveLocalParent.children[0].children[0] as LineSegments;
-        const frontLinePositions = frontLineSegments.geometry.attributes.position.array;
-        const centerX = (xLeft + xRight) / 2;
-        const centerY = (yTop + yBottom) / 2;
-        const xLeftAdjusted =   skipCubeOffset ? xLeft   : centerX + (xLeft - centerX)   * (1 + this.regionBordersDistanceFromCubeCenterOffset);
-        const xRightAdjusted =  skipCubeOffset ? xRight  : centerX + (xRight - centerX)  * (1 + this.regionBordersDistanceFromCubeCenterOffset);
-        const yTopAdjusted =    skipCubeOffset ? yTop    : centerY + (yTop - centerY)    * (1 + this.regionBordersDistanceFromCubeCenterOffset);
-        const yBottomAdjusted = skipCubeOffset ? yBottom : centerY + (yBottom - centerY) * (1 + this.regionBordersDistanceFromCubeCenterOffset);
-
-        const minZ = -xRightAdjusted;
-        const maxZ = -xLeftAdjusted;
-        const topIsMaxY = yTopAdjusted > yBottomAdjusted; // is this always true?
-        const minY = topIsMaxY ? yBottomAdjusted : yTopAdjusted;
-        const maxY = topIsMaxY ? yTopAdjusted : yBottomAdjusted;
-
-        const normalizeZForOverflow = (z: number) => {
-            if (this.dimensionOverflow[Dimension.X] && z < -worldSizeX / 2) {
-                return z + worldSizeX;
-            } 
-            return z;
-        }
-
-        for (let face = 2; face < 6; face++) {
-            if (!faceChanged[face - 2] && !refreshEverything) {
-                continue;
-            }
-            if (!this.faceVisibility[face]) {
-                continue;
-            }
-            const sideLines = this.regionBordersSideLines.get(face)!;
-            sideLines.visible = true;
-            const intersectingSegments: Vector3[] = [];
-
-            if (face == CubeFace.Left || face == CubeFace.Right) {
-                const zCutoff = normalizeZForOverflow(face == CubeFace.Left ? maxZ : minZ);
-                const filteredFrontLineIndices = (this.regionBordersFrontActiveLocalParent.userData.lineSegmentMapZ as FastLineSegmentMap).getAllIndicesAtValue(zCutoff);
-                for (let i = 0; i < filteredFrontLineIndices.length; i += 2) {
-                    const p1index = filteredFrontLineIndices[i] * 3;
-                    const p2index = filteredFrontLineIndices[i + 1] * 3;
-                    const p1Y = frontLinePositions[p1index + 1];
-                    const p1Z = frontLinePositions[p1index + 2];
-                    const p2Y = frontLinePositions[p2index + 1];
-                    const p2Z = frontLinePositions[p2index + 2];
-            
-                    // Check if the segment crosses the cutoff plane
-                    if ((p1Z < zCutoff && p2Z > zCutoff) || (p1Z > zCutoff && p2Z < zCutoff)) {
-                        const t = (zCutoff - p1Z) / (p2Z - p1Z);
-                        const intersection = new Vector3(
-                            0,
-                            p1Y + t * (p2Y - p1Y),
-                            zCutoff
-                        );
-                        if (intersection.y < minY || intersection.y > maxY) {
-                            continue;
-                        }
-                        intersectingSegments.push(intersection);
-                    }
-                }
-            } else {
-                const yCutoff = face == CubeFace.Top ? maxY : minY;
-                const filteredFrontLineIndices = (this.regionBordersFrontActiveLocalParent.userData.lineSegmentMapY as FastLineSegmentMap).getAllIndicesAtValue(yCutoff);
-
-                for (let i = 0; i < filteredFrontLineIndices.length; i += 2) {
-                    const p1index = filteredFrontLineIndices[i] * 3;
-                    const p2index = filteredFrontLineIndices[i + 1] * 3;
-                    const p1Y = frontLinePositions[p1index + 1];
-                    const p2Y = frontLinePositions[p2index + 1];
-                    let p1Z = (frontLinePositions[p1index + 2]);
-                    let p2Z = (frontLinePositions[p2index + 2]);
-
-                    // Check if the segment crosses the cutoff plane
-                    if ((p1Y < yCutoff && p2Y > yCutoff) || (p1Y > yCutoff && p2Y < yCutoff)) {
-                        const t = (yCutoff - p1Y) / (p2Y - p1Y);
-                        const intersection = new Vector3(
-                            0,
-                            yCutoff,
-                            p1Z + t * (p2Z - p1Z),
-                        );
-
-                        if (this.dimensionOverflow[Dimension.X] && intersection.z > maxZ) {
-                            intersection.z -= worldSizeX;
-                        }
-
-                        if (intersection.z < minZ || intersection.z > maxZ) {
-                            continue;
-                        }
-                        intersectingSegments.push(intersection);
-                    }
-                }
-            }
-            
-            const positions = sideLines.geometry.attributes.position;
-            let lineAmount = positions.count / 2;
-
-            const intersectingAmount = intersectingSegments.length;
-            if (intersectingAmount > lineAmount) {
-                const newLineAmount = intersectingAmount + 20;
-                this.context.log("Increasing side region border line pool from ", lineAmount, "to", newLineAmount);
-                const newPositions = this.createRegionBordersSideLinePositions(face, newLineAmount);
-                sideLines.geometry.setAttribute('position', new Float32BufferAttribute(newPositions, 3));
-                lineAmount = newLineAmount;
-            }
-            const smallerLimit = Math.min(lineAmount, intersectingAmount);
-
-            if (face == CubeFace.Left || face == CubeFace.Right) {
-                for (let i = 0; i < smallerLimit; i++) {
-                    const y = this.regionBordersFrontParent.localToWorld(intersectingSegments[i]).y;
-                    positions.setY(i * 2, y);
-                    positions.setY(i * 2 + 1, y);
-                }
-            } else {
-                for (let i = 0; i < smallerLimit; i++) {
-                    const z = this.regionBordersFrontParent.localToWorld(intersectingSegments[i]).z;
-                    positions.setZ(i * 2, z);
-                    positions.setZ(i * 2 + 1, z);
-                }
-            }
-            const newIndex = range(0, smallerLimit * 2 - 1);
-            sideLines.geometry.setIndex(newIndex);
-            sideLines.geometry.attributes.position.needsUpdate = true;
-            sideLines.geometry.index!.needsUpdate = true;
-            
-            switch (face) {
-                case CubeFace.Top:
-                    this.lastSideRegionYTop = yTop;
-                    break;
-                case CubeFace.Bottom:
-                    this.lastSideRegionYBottom = yBottom;
-                    break;
-                case CubeFace.Left:
-                    this.lastSideRegionXLeft = xLeft;
-                    break;
-                case CubeFace.Right:
-                    this.lastSideRegionXRight = xRight;
-                    break;
-            }
-        }
-    }
-
-    async updateRegionBorderPositionAndResolution(finalChange: boolean = true) {
-        if (!this.regionBordersFrontParent) {
-            return;
-        }
-        if (!this.context.interaction.cubeDimensions.isGeospatialContextValid()) {
-            this.regionBordersFrontParent.visible = false;
-            this.context.log("Geospatial context not provided, hiding region borders");
-            return;
-        }
-        this.regionBordersFrontParent.visible = true;
+    async updateRegionBorderPositionAndResolution() {
+        ///// Time series marker /////
 
         const indexValueLeft = this.context.interaction.cubeSelection.getIndexValueForFace(CubeFace.Left);
         const indexValueRight = this.context.interaction.cubeSelection.getIndexValueForFace(CubeFace.Right);
         const indexValueTop = this.context.interaction.cubeSelection.getIndexValueForFace(CubeFace.Top);
         const indexValueBottom = this.context.interaction.cubeSelection.getIndexValueForFace(CubeFace.Bottom);
 
-        const xTotalRange = this.context.interaction.cubeDimensions.getGeospatialTotalRangeX();
-        const yTotalRange = this.context.interaction.cubeDimensions.getGeospatialTotalRangeY();
+        const xTotalRangeNumeric = this.context.interaction.cubeDimensions.getCubeDimensionByDimension(Dimension.X).steps;
+        const yTotalRangeNumeric = this.context.interaction.cubeDimensions.getCubeDimensionByDimension(Dimension.Y).steps;
+        const xSelectedRangeNumeric = new ParameterRange(indexValueLeft, indexValueRight + 1);
+        const ySelectedRangeNumeric = new ParameterRange(indexValueTop, indexValueBottom + 1);
+        const selectionCenterPointNumeric = new Vector2(xSelectedRangeNumeric.middle() - 0.5, ySelectedRangeNumeric.middle() - 0.5);
+        const datasetCenterPointNumeric = new Vector2((xTotalRangeNumeric) / 2,(yTotalRangeNumeric) / 2);
+        const datasetSizeNumeric = new Vector2(xTotalRangeNumeric, yTotalRangeNumeric);
+        const selectionSizeNumeric = new Vector2(xSelectedRangeNumeric.range(), ySelectedRangeNumeric.range());
+        const zoomRelativeToDatasetNumeric = new Vector2().copy(datasetSizeNumeric).divide(selectionSizeNumeric);
 
-        const xSelectedRange = this.context.interaction.cubeDimensions.getGeospatialSubRangeX(indexValueLeft, indexValueRight);
-        const ySelectedRange = this.context.interaction.cubeDimensions.getGeospatialSubRangeY(indexValueTop, indexValueBottom);
+        const normalizationMatrixNumeric = new Matrix4() // normalizes numeric data that fits into the dataset bounds to [-0.5, 0.5] x [-0.5, 0.5]
+            .multiply(new Matrix4().makeScale(1, 1 / datasetSizeNumeric.y, 1 / datasetSizeNumeric.x))
+            .multiply(new Matrix4().makeTranslation(0.5 + this.timeSeriesPinDepth * 0.6, datasetCenterPointNumeric.y, -datasetCenterPointNumeric.x));
+            // todo: maybe rotate here for other faces
 
-        const selectionCenterPoint = new Vector2(xSelectedRange.middle(), ySelectedRange.middle());
-        const selectionSize = new Vector2(xSelectedRange.range(), ySelectedRange.range());
-        const datasetCenterPoint = new Vector2(xTotalRange.middle(), yTotalRange.middle());
-        const datasetSize = new Vector2(xTotalRange.range(), yTotalRange.range());
-
-        const zoomRelativeToDataset = new Vector2().copy(datasetSize).divide(selectionSize);
-        const cubeScale = this.getCubeScaleInRenderWorld();
-        zoomRelativeToDataset.x *= cubeScale.z;
-        zoomRelativeToDataset.y *= cubeScale.y;
-
-        const normalizationMatrix = new Matrix4() // normalizes GeoJSON that fits into the dataset bounds to [-0.5, 0.5] x [-0.5, 0.5] 
-            .multiply(new Matrix4().makeScale(1, 1 / yTotalRange.range(), 1 / xTotalRange.range()))
-            .multiply(new Matrix4().makeTranslation(0, -datasetCenterPoint.y, -datasetCenterPoint.x))
-
-        const finalMatrix = new Matrix4()
+        const finalMatrixNumeric = new Matrix4()
             .makeTranslation(
-                this.regionBordersDistanceFromCubeCenterInRenderWorld.x * (this.faceVisibility[CubeFace.Back] ? -1 : 1), // move to front or back depending on face visibility 
-                -zoomRelativeToDataset.y * (selectionCenterPoint.y - datasetCenterPoint.y) / datasetSize.y, // positive data Y = positive global Y
-                zoomRelativeToDataset.x * (selectionCenterPoint.x + datasetCenterPoint.x) / datasetSize.x  // positive data X = negative global Z
+                0,
+                zoomRelativeToDatasetNumeric.y * (selectionCenterPointNumeric.y - datasetCenterPointNumeric.y) / datasetSizeNumeric.y, // positive data Y = positive global Y
+                zoomRelativeToDatasetNumeric.x * (selectionCenterPointNumeric.x + datasetCenterPointNumeric.x) / datasetSizeNumeric.x  // positive data X = negative global Z
             )
-            .multiply(new Matrix4().makeScale(1, zoomRelativeToDataset.y, zoomRelativeToDataset.x)) // apply zoom
-            .multiply(normalizationMatrix);
+            .multiply(new Matrix4().makeScale(1, zoomRelativeToDatasetNumeric.y, zoomRelativeToDatasetNumeric.x)) // apply zoom
+            .multiply(normalizationMatrixNumeric);
 
-        if (this.dimensionOverflow[Dimension.X] && this.regionBordersFrontActiveLocalParent && this.regionBordersFrontActiveLocalParent.children.length > 0) {
-            if (!this.regionBordersFrontActiveLocalParent.userData.overflowActive) {
-                this.regionBordersFrontActiveLocalParent.userData.activateOverflow();
-            }
-            const overflowOffsetZ = -datasetSize.x; // this used to be negative for zeroIndexGreenwich data sets, not sure why not anymore
-            if (this.regionBordersFrontActiveLocalParent.children[1].position.z != overflowOffsetZ) {
-                this.regionBordersFrontActiveLocalParent.children[1].position.setZ(overflowOffsetZ);
-            }
+        this.contextLayerParentFront.matrixAutoUpdate = false;
+        this.contextLayerParentFront.matrix.identity();
+        this.contextLayerParentFront.applyMatrix4(finalMatrixNumeric);
+        this.contextLayerParentFront.updateMatrixWorld(true); // needs force. alternatively: .matrixWorldNeedsUpdate = true;
+
+        for (let marker of this.contextLayerParentFront.children) {
+            marker.scale.set(1, datasetSizeNumeric.y / zoomRelativeToDatasetNumeric.y, datasetSizeNumeric.x / zoomRelativeToDatasetNumeric.x);
+            marker.updateMatrixWorld(true);
         }
 
-        this.regionBordersFrontParent.matrixAutoUpdate = false;
-        this.regionBordersFrontParent.matrix.identity();
-        this.regionBordersFrontParent.applyMatrix4(finalMatrix);
-        this.regionBordersFrontParent.updateMatrixWorld(true); // needs force. alternatively: .matrixWorldNeedsUpdate = true;
-        
-        this.updateSideRegionBorders(
-            xSelectedRange.getFirst(),
-            xSelectedRange.getLast(),
-            ySelectedRange.getFirst(),
-            ySelectedRange.getLast(),
-            datasetSize.x
-        );
-
-        if (!this.context.widgetMode) {
-            if (Math.max(zoomRelativeToDataset.x, zoomRelativeToDataset.y) > 100) {
-                // hide region borders since we are all the way zoomed in
-            } else {
-                const zoomFactor = (zoomRelativeToDataset.x + zoomRelativeToDataset.y) / 2;
-                const targetResolution = zoomFactor > 5 ? NaturalEarthRegionBorderResolution.Highest : zoomFactor > 2 ? NaturalEarthRegionBorderResolution.High : NaturalEarthRegionBorderResolution.Default;
-                if (this.currentRegionBorderResolution != targetResolution && !this.regionBordersJustLoaded) {
-                    await this.loadRegionBorders(targetResolution);
-                }
-            }
-        }
-
+        ///// Front region borders /////
+        await this.regionBorders.updatePositionAndResolution();
     }
 
-    setCubeLightingEnabled(lightEnabled: boolean = !(this.context.studioMode || this.context.widgetMode)) {
+    transitionBetweenCameraStyles(previousCamera: PerspectiveCamera | OrthographicCamera, newCamera: PerspectiveCamera | OrthographicCamera) {
+        // this.context.interaction.updateControlsCamera(this.getCurrentCamera());
+        
+        const newPosition = previousCamera.position.clone().multiplyScalar(newCamera.position.length() / previousCamera.position.length());
+        newCamera.position.copy(newPosition);
+        newCamera.rotation.copy(previousCamera.rotation);
+
+        if (newCamera instanceof OrthographicCamera) {
+            // perspective distance converted to ortho zoom
+            const p = clamp(inverseLerp(PERSPECTIVE_MIN_DISTANCE, PERSPECTIVE_MAX_DISTANCE, previousCamera.position.length()), 0, 1);
+            const z = lerp(ORTHOGRAPHIC_MIN_ZOOM, ORTHOGRAPHIC_MAX_ZOOM, 1 - p)
+            newCamera.zoom = z;
+        } else {
+            // ortho zoom converted to perspective distance
+            const p = clamp(inverseLerp(ORTHOGRAPHIC_MIN_ZOOM, ORTHOGRAPHIC_MAX_ZOOM, previousCamera.zoom), 0, 1);
+            newCamera.position.copy(newPosition).setLength(lerp(PERSPECTIVE_MIN_DISTANCE, PERSPECTIVE_MAX_DISTANCE, 1 - p));
+        }
+
+        this.context.log("[transitionBetweenCameraStyles] Old camera, zoom", previousCamera.zoom, "distance", previousCamera.position.length())
+        this.context.log("[transitionBetweenCameraStyles] New camera, zoom", newCamera.zoom, "distance", newCamera.position.length());
+        // this.context.interaction.updateControls();
+        this.onWindowResize();
+    }
+
+    private first3dLodReveal = false;
+    private playAnimationOnNext3dLodReveal = false;
+
+    toggleVolumeRenderingMode(volumeRenderingEnabled: boolean, updateAndRender: boolean = true) {
+        if (volumeRenderingEnabled && !this.volumeRenderingEnabled) {
+            this.updateLod3d();
+            this.context.interaction.showResolutionChangeInfo(this.lod3d);
+            this.first3dLodReveal = true;
+        }
+
+        this.volumeRenderingEnabled = volumeRenderingEnabled;
+        this.tile3dVolumeRenderedCube.visible = false;
+        this.tile2dFaceRenderedCube.visible = true;
+        this.context.log("Toggling volume rendering mode:", volumeRenderingEnabled);
+
+        // this.blockBasedVolumeRenderingSubCubesParent.visible = volumeRenderingEnabled;
+        this.blockBasedVolumeRenderingImposterBillboardsParent.visible = volumeRenderingEnabled;
+        
+        this.renderer.setClearColor(new Color(volumeRenderingEnabled ? "black" : "black"), 1);
+        this.regionBorders.getFrontMaterial().color.set(volumeRenderingEnabled ? "white": "black");
+        this.regionBorders.getSideMaterial().visible = !volumeRenderingEnabled;
+        // this.regionBorders.getFrontMaterial().transparent = !volumeRenderingEnabled;
+        this.regionBorders.getSideMaterial().transparent = !volumeRenderingEnabled;
+        this.outlineCubeForVolumeRendering.visible = volumeRenderingEnabled;
+
+        // this.cameraChanged();
+        if (updateAndRender) {
+            this.updateVisibilityAndLods();
+            this.requestRender();
+        }
+    }
+
+    set2dCubeLightingEnabled(lightEnabled: boolean = !(this.context.studioMode || this.context.widgetMode || this.context.orchestrationMinionMode)) {
         // front, back, top, bottom, left, right
-        const lightStrengths = [ 0.0, 0.0, -0.05, -0.1, -0.15, -0.15 ];
+        const lightStrengths = [ 0.0, 0.0, -0.05, -0.1, -0.15, -0.15 ]; // comes from the front?
         for (let i = 0; i < 6; i++) {
-            this.cube.material[i].uniforms["lightStrength"].value = lightEnabled ? lightStrengths[i] : 0.0;
+            this.tile2dFaceRenderedCube.material[i].uniforms["lightStrength"].value = lightEnabled ? lightStrengths[i] : 0.0;
         }
     }
 
@@ -1262,7 +565,27 @@ class CubeRendering {
         return this.renderer.domElement;
     }
 
+    private gltfLoader: GLTFLoader = new GLTFLoader();
+    private pinModel: Mesh<BufferGeometry, MeshPhongMaterial> | undefined;
+    private timeSeriesPinWidthHeight = 0.07;
+    private timeSeriesPinDepth = 0.15;
+
+    private loadModels() {
+        // load gltf from "pin.glb"
+        this.gltfLoader.load(PinModel, (gltf) => {
+            this.pinModel = gltf.scene.children[0].children[0] as Mesh<BufferGeometry, MeshPhongMaterial>;
+            const size = new Box3().setFromObject(this.pinModel).getSize(new Vector3());
+            this.pinModel.scale.set(this.timeSeriesPinWidthHeight / size.x, this.timeSeriesPinWidthHeight / size.y, this.timeSeriesPinDepth / size.z);
+            this.pinModel.rotateX(-Math.PI / 2); // todo: do this later in the matrix multiplication chain
+            this.pinModel.rotateY(Math.PI / 2);
+            this.pinModel.geometry.computeVertexNormals();
+        });
+    }
+
     startup() {
+        this.loadModels();
+        this.context.interaction.updateVolumeVizRenderStyleFromUi();
+        this.prepareVolumeRenderImposterBillboards();
         this.animate();
     }
     
@@ -1272,31 +595,179 @@ class CubeRendering {
     }
     
     resetForNewParameter() {
-        this.totalSizes = new Array<Vector2>();
-        this.lods = new Array<number>();
+        this.totalSizes2D = new Array<Vector2>();
+        this.totalSize3D = new Vector3();
+        this.lods2d = new Array<number>();
+        this.lod3d = INVALID_LOD_PLACEHOLDER;
         const dims = this.context.interaction.cubeDimensions;
         const sel = this.context.interaction.cubeSelection;
 
         const matchTimeScale = document.URL.match(/cubeTimeScale=(\d+\.?\d*)/);
         if (matchTimeScale && matchTimeScale.length > 0) {
-            this.cube.scale.set(parseFloat(matchTimeScale[1]), 1, 1);
+            this.tile2dFaceRenderedCube.scale.set(parseFloat(matchTimeScale[1]), 1, 1);
         }
 
         for (let face = 0; face < 6; face++) {
             const width = dims.totalWidthForFace(face);
             const height = dims.totalHeightForFace(face);
-            this.totalSizes.push(new Vector2(width, height));
-            this.lods.push(0);
-            this.cube.material[face].uniforms["totalSize"].value = this.totalSizes[face];
-            sel.setUniformLocations(face, this.cube.material[face].uniforms["displaySize"], this.cube.material[face].uniforms["displayOffset"])
-            this.cube.material[face].uniforms["lod"].value = this.lods[face];
+            this.totalSizes2D.push(new Vector2(width, height));
+            this.lods2d.push(INVALID_LOD_PLACEHOLDER);
+            this.tile2dFaceRenderedCube.material[face].uniforms["totalSize"].value = this.totalSizes2D[face];
+            sel.setUniformLocations2d(face, this.tile2dFaceRenderedCube.material[face].uniforms["displaySize"], this.tile2dFaceRenderedCube.material[face].uniforms["displayOffset"])
+            this.tile2dFaceRenderedCube.material[face].uniforms["lod"].value = this.lods2d[face];
         }
+
+        this.totalSize3D = dims.totalSize();
+        this.tile3dVolumeRenderedCube.material.uniforms["totalSize"].value.set(this.totalSize3D.x, this.totalSize3D.y, this.totalSize3D.z);
+        sel.setUniformLocations3d(this.tile3dVolumeRenderedCube.material.uniforms["displaySize"], this.tile3dVolumeRenderedCube.material.uniforms["displayOffset"]);
+        this.tile3dVolumeRenderedCube.material.uniforms["lod"].value = this.lod3d;
+
+        this.playAnimationOnNext3dLodReveal = true;
+
+        console.log("New total size 3D", this.totalSize3D);
     }
 
-    raycastWindowPosition(mouseX: number, mouseY: number) {
+
+    // Convert data coordinates (X=longitude, left>right), (Y=latitude, up>down), (Z=time, back>front) [syntax: low values > high values]
+    // to render world coordinates (x=back>front, y=down>up, z=right>left)
+    dataCoordinatesToRenderWorldCoordinates(dataCoordinates: Vector3): Vector3 {
+        return new Vector3(
+            dataCoordinates.z,
+            -dataCoordinates.y,
+            -dataCoordinates.x
+        );
+    }
+
+    renderWorldCoordinatesToDataCoordinates(renderWorldCoordinates: Vector3): Vector3 {
+        return new Vector3(
+            -renderWorldCoordinates.z,
+            -renderWorldCoordinates.y,
+            renderWorldCoordinates.x
+        );
+    }
+
+    dataScaleToRenderWorldScale(dataScale: Vector3): Vector3 {
+        return new Vector3(
+            dataScale.z,
+            dataScale.y,
+            dataScale.x
+        );
+    }
+
+
+    // URL TO TEST (scale 1:1:1):
+    // http://localhost:8080/?debug,isometric!esdc-3.0.2/air_temperature_2m/0-512/0-512/104-616
+
+    private readonly BLOCK_BASED_VOLUME_RENDER_MAX_RENDER_PASSES = 16;
+
+    private blockBasedVolumeRenderingImposterBillboardsParent!: Object3D;
+    private blockBasedVolumeRenderingImposterBillboards: Mesh<PlaneGeometry, ShaderMaterial>[] = [];
+
+    prepareVolumeRenderImposterBillboards() {
+        // each billboard corresponds to a 3D tile (currently 256³ data units)
+
+
+        const newImpostorBillboardMaterial = () => {
+            const vertexShader = /* glsl */`
+                    varying vec2 vUv;
+    
+                    uniform float ndcWidth;
+                    uniform float ndcHeight;
+                    uniform vec2 ndcPosition;
+                    uniform float ndcDepth;
+    
+                    void main() {
+                        vUv = uv;
+                        vec2 scaledPosition = position.xy * vec2(ndcWidth, ndcHeight);
+                        vec2 finalPosition = scaledPosition + ndcPosition;
+                        gl_Position = vec4(finalPosition, ndcDepth, 1.0);
+                    }
+    
+                `;
+            const fragmentShader = /* glsl */`
+                    varying vec2 vUv;
+
+                    uniform sampler2DArray viewTile;
+                    uniform float layer;
+
+                    void main() {
+                        vec4 viewTileResult = texture(viewTile, vec3(vUv, layer)).rgba;
+                        if (viewTileResult.a < 0.01) {
+                            discard;
+                        }
+                        gl_FragColor = vec4(viewTileResult.rgb, viewTileResult.a);
+                    }
+                `;
+            
+            return new ShaderMaterial({
+                vertexShader: vertexShader,
+                fragmentShader: fragmentShader,
+                side: DoubleSide,
+                
+                transparent: true,
+                depthTest: true,
+                depthWrite: false,
+                
+                uniforms: {
+                    ndcWidth: { value: 1 },
+                    ndcHeight: { value: 1 },
+                    ndcPosition: { value: new Vector2(0, 0) },
+                    ndcDepth: { value: 0.5 },
+                    layer: { value: 0 },
+                    viewTile: { value: null },
+                }
+            });
+        }
+
+        this.blockBasedVolumeRenderingImposterBillboards = [];
+
+        for (let lod = 0; lod < MAXIMUM_SUPPORTED_LOD; lod++) {
+            for (let renderPass = 0; renderPass < this.BLOCK_BASED_VOLUME_RENDER_MAX_RENDER_PASSES; renderPass++) {
+                const imposterBillboard = new Mesh(new PlaneGeometry(1, 1), newImpostorBillboardMaterial());
+                
+                this.blockBasedVolumeRenderingImposterBillboardsParent.add(imposterBillboard);
+                imposterBillboard.userData = {
+                    lod: lod,
+                    renderPass: renderPass,
+                }
+                this.blockBasedVolumeRenderingImposterBillboards.push(imposterBillboard);
+            }
+        }
+
+    }
+
+    applyCameraPreset(c: { name: string; position: Vector3; rotation: Euler; }, isDefaultPreset: boolean, cameraOverride?: OrthographicCamera, fromWidgetMode: boolean = false) {
+        // TODO: integrate this
+        // let position = c.position.clone();
+        const camera = cameraOverride || this.perspectiveCamera;
+        if (isDefaultPreset && !this.context.rendering.printTemplateDownloading && !this.context.isometricMode) {
+            this.context.rendering.adjustCameraPresetToCube(c.position);
+        }
+        let positionForPerspectiveCamera = c.position.clone();
+        const rotation = c.rotation;
+        
+        const targetCamera = camera;
+        targetCamera.zoom = 1;
+        targetCamera.position.copy(positionForPerspectiveCamera);
+        targetCamera.rotation.set(rotation.x, rotation.y, rotation.z);
+        targetCamera.updateMatrixWorld();
+        targetCamera.updateProjectionMatrix();
+
+        if (!this.printTemplateDownloading) {
+            this.transitionBetweenCameraStyles(this.perspectiveCamera, this.orthographicCamera);
+            this.context.interaction.updateControls(fromWidgetMode);
+            this.updateCameras();
+        }
+        
+        this.requestRender(false);
+    }
+
+    raycastWindowPosition(mouseX: number, mouseY: number, contextLayerAllowed: boolean = false) {
         const x = (mouseX / this.getWidth()) * 2 - 1;
         const y = -(mouseY / this.getHeight()) * 2 + 1;
-        return this.raycastNdc(new Vector2(x, y));
+        const ray = this.raycastNdc(new Vector2(x, y), contextLayerAllowed);
+        const type = ray.length == 0 ? RaycastResultType.Background : ray[0].object.userData.isCube ? RaycastResultType.Cube : RaycastResultType.ContextLayer;
+        return { ray, type };
     }
 
     getWidth() {
@@ -1315,9 +786,10 @@ class CubeRendering {
         }
     }
 
-    raycastNdc(ndc: Vector2) {
-        this.rayCaster.setFromCamera(ndc, this.mainCamera);
-        return this.rayCaster.intersectObjects([this.cube]);
+    private raycastNdc(ndc: Vector2, contextLayerAllowed: boolean = false) {
+        this.rayCaster.setFromCamera(ndc, this.getCurrentCamera());
+        const objects = contextLayerAllowed ? [this.tile2dFaceRenderedCube, ...this.contextLayerParentFront.children] : [this.tile2dFaceRenderedCube];
+        return this.rayCaster.intersectObjects(objects);
     }
 
     private vertexShader() {
@@ -1334,22 +806,24 @@ class CubeRendering {
     }
       
     private fragmentShader() {
-        return `
+        const textureAccessCode = (isRgb: boolean) => range(0, MAXIMUM_SUPPORTED_LOD).map(lod => `${lod == 0 ? "" : "else " }if (lod == ${lod}) {
+                    ${isRgb ? "colormapped_rgba" : "datavalue"} = (texture(${TILES_TEXTURE_NAME}${lod}, uv_within_ttv)).${isRgb ? "rgba" : "r"};
+                } `).join("");
+        
+        const shader = `
         precision highp float; 
         precision highp int; 
     
         varying vec2 v_uv;
-        uniform highp sampler2DArray tilesLod0;
-        uniform highp sampler2DArray tilesLod1;
-        uniform highp sampler2DArray tilesLod2;
-        uniform highp sampler2DArray tilesLod3;
-        uniform highp sampler2DArray tilesLod4;
-        uniform highp sampler2DArray tilesLod5;
-        uniform highp sampler2DArray tilesLod6;
+
+        ${range(0, MAXIMUM_SUPPORTED_LOD).map(i => `uniform highp sampler2D ${TILES_TEXTURE_NAME}${i};`).join("\n")}
         
-        const float TILE_SIZE = ${TILE_SIZE}.0;
-        const float NAN_REPLACEMENT_VALUE = ${NAN_REPLACEMENT_VALUE}.0;
-        const float NOT_LOADED_REPLACEMENT_VALUE = ${NOT_LOADED_REPLACEMENT_VALUE}.0;
+        const float TILE_SIZE = ${TILE_SIZE_2D}.0;
+        const float FLOAT_NAN_REPLACEMENT_VALUE = ${FLOAT_NAN_REPLACEMENT_VALUE}.0;
+        const float FLOAT_NOT_LOADED_REPLACEMENT_VALUE = ${FLOAT_NOT_LOADED_REPLACEMENT_VALUE}.0;
+        const float RGB_NOT_LOADED_ALPHA_VALUE = ${RGB_NOT_LOADED_ALPHA_VALUE}.0;
+        const float RGB_NAN_ALPHA_VALUE = ${RGB_NAN_ALPHA_VALUE}.0;
+        
         uniform vec2 totalSize; // the whole thing, even offscreen stuff
     
         uniform vec2 displaySize; // what is being displayed on the cube, subset of the whole thing
@@ -1365,10 +839,18 @@ class CubeRendering {
         uniform bool overflowY;
         uniform sampler2D colormap;
 
+        uniform bool equalAreaCorrectX;
+        uniform bool equalAreaCorrectY;
+
+        uniform bool formatIsRgb;
+
         uniform bool gpsPositionEnabled;
         uniform vec2 gpsPositionRelativeCoordinates; // relative within current totalSize
     
         uniform int lod;
+
+        uniform vec2[${MAXIMUM_SUPPORTED_LOD + 1}] tileSizesFromTtvs;
+        uniform vec2[${MAXIMUM_SUPPORTED_LOD + 1}] tileOffsetsFromTtvs;
 
         vec2 positiveModTotalSize(vec2 v) {
             if (overflowX && overflowY) {
@@ -1402,6 +884,13 @@ class CubeRendering {
             return mix(blue, white, step(0.8, x));
         }
 
+        // 
+        float lambert_cylindrical_equal_area(float yEA) {
+            float val = 1.0 - 2.0 * yEA;
+            float angle = asin(val);
+            return 0.5 - angle / 3.14159265358979323846;
+        }
+
         void main() {
             vec2 display_uv = clamp(positiveMod1(v_uv * displaySize / totalSize + displayOffset / totalSize), vec2(0.0), totalSize - vec2(1.0)); 
 
@@ -1409,100 +898,224 @@ class CubeRendering {
             vec2 total_tiles = totalSize * pow(0.5, float(lod)) / TILE_SIZE;
             vec2 total_tiles_whole = ceil(total_tiles);
 
-            vec2 unclamped_pixel = positiveModTotalSize(displayOffset + clamp(v_uv, vec2(0.00001), vec2(0.99999)) * displaySize); // prevent pixel bleeding artifacts at edges
+            vec2 unclamped_pixel = displayOffset + clamp(v_uv, vec2(0.00001), vec2(0.99999)) * displaySize; // prevent pixel bleeding artifacts at edges
             vec2 minimum = mix(displayOffset, vec2(0.0), vec2(float(unclamped_pixel.x < displayOffset.x), float(unclamped_pixel.y < displayOffset.y)));
             vec2 maximum = displayOffset + displaySize; // exclusive bound, already next non-visible pixel at this coordinate
 
             vec2 clamp_border = vec2(0.01); // vec2(0.5) definitely removes all artifacts, vec2(0.01) also seems to remove all artifacts
             vec2 pixel = clamp(unclamped_pixel, minimum + clamp_border, maximum - clamp_border); // prevent pixel bleeding artifacts at edges
-    
+
+            if (equalAreaCorrectX) {
+                pixel.x = lambert_cylindrical_equal_area(pixel.x / totalSize.x) * totalSize.x; 
+                display_uv.x = lambert_cylindrical_equal_area(display_uv.x);
+            }
+            if (equalAreaCorrectY) {
+                pixel.y = lambert_cylindrical_equal_area(pixel.y / totalSize.y) * totalSize.y; 
+                display_uv.y = lambert_cylindrical_equal_area(display_uv.y);
+            }
+
+            float overflowSkipOffset = tile_size_adjusted - mod(totalSize.x, tile_size_adjusted);
+            bool overflownTtv = tileOffsetsFromTtvs[lod].x + tileSizesFromTtvs[lod].x - overflowSkipOffset > totalSize.x;
+            bool overflownDisplay = displayOffset.x + displaySize.x > totalSize.x;
+            
+            if (overflowX && pixel.x >= totalSize.x && overflownTtv) { 
+                pixel.x += overflowSkipOffset; // push ahead to skip the "overflow" part of overflow tiles 
+            } 
+
+            // CASE 2 - ttv in small-positive domain, display/pixel in overflow domain
+            if (overflowX && !overflownTtv && pixel.x >= totalSize.x) {
+                pixel.x += -totalSize.x; // push back into small-positive domain
+            }
+            
+            // CASE 3 - ttv in overflow domain, display/pixel in small-positive domain -> push display into overflow domain, minus the overflow part
+            if (overflowX && overflownTtv && !overflownDisplay && pixel.x < tileOffsetsFromTtvs[lod].x) {
+                pixel.x += totalSize.x + overflowSkipOffset; // push ahead to reach the overflow part of overflow tiles
+            }
+
+            vec2 uv_within_ttv = (pixel - tileOffsetsFromTtvs[lod]) / tileSizesFromTtvs[lod];
+            bool is_in_ttv = uv_within_ttv.x >= 0.0 && uv_within_ttv.x <= 1.0 && uv_within_ttv.y >= 0.0 && uv_within_ttv.y <= 1.0;
+
             vec2 selected_tile = clamp(floor(pixel / tile_size_adjusted), vec2(0.0), total_tiles_whole - vec2(1.0));
-            float selected_tile_index = selected_tile.x + selected_tile.y * total_tiles_whole.x;
+            // float selected_tile_index = selected_tile.x + selected_tile.y * total_tiles_whole.x;
 
             vec2 local_tile_uv = (pixel - selected_tile * tile_size_adjusted) / tile_size_adjusted;
 
-            float datavalue = 0.0;
-            if (lod == 0) {
-                datavalue = (texture(tilesLod0, vec3(local_tile_uv, selected_tile_index))).r;
-            } else if (lod == 1) {
-                datavalue = (texture(tilesLod1, vec3(local_tile_uv, selected_tile_index))).r;
-            } else if (lod == 2) {
-                datavalue = (texture(tilesLod2, vec3(local_tile_uv, selected_tile_index))).r;
-            } else if (lod == 3) {
-                datavalue = (texture(tilesLod3, vec3(local_tile_uv, selected_tile_index))).r;
-            } else if (lod == 4) {
-                datavalue = (texture(tilesLod4, vec3(local_tile_uv, selected_tile_index))).r;
-            } else if (lod == 5) {
-                datavalue = (texture(tilesLod5, vec3(local_tile_uv, selected_tile_index))).r;
-            } else if (lod == 6) {
-                datavalue = (texture(tilesLod6, vec3(local_tile_uv, selected_tile_index))).r;
+            vec3 colormapped = vec3(0.0);
+
+            float isCheckerboard = 0.0;
+            vec3 checkerboardColor = vec3(float(int(floor(10.0 * (local_tile_uv.x)) + floor(10.0 * (local_tile_uv.y))) % 2) * 0.2 + 0.4);
+            float isNan = 0.0;
+            vec3 nanColor = vec3(0.2);
+
+            if (formatIsRgb) {
+                vec4 colormapped_rgba = vec4(0.0);
+                ${textureAccessCode(true)} // sets colormapped_rgba
+
+                colormapped = colormapped_rgba.rgb;
+
+                isCheckerboard = float(colormapped_rgba.a == RGB_NOT_LOADED_ALPHA_VALUE || hideData || !is_in_ttv);
+                isNan = float(colormapped_rgba.a == RGB_NAN_ALPHA_VALUE);
+            } else {
+                float datavalue = 0.0;
+                ${textureAccessCode(false)} // sets datavalue
+                
+                float p = clamp((datavalue - colormapLowerBound) / (colormapUpperBound - colormapLowerBound), 0.0, 1.0);
+                p = mix(p, 1.0 - p, float(colormapFlipped));
+                colormapped = texture(colormap, vec2(p, 0.0)).rgb;
+
+                isCheckerboard = float(datavalue == FLOAT_NOT_LOADED_REPLACEMENT_VALUE || hideData || !is_in_ttv);
+                isNan = float(datavalue == FLOAT_NAN_REPLACEMENT_VALUE);
+            }
+            colormapped = mix(mix(colormapped, nanColor, isNan), checkerboardColor, isCheckerboard);
+
+            if (gpsPositionEnabled) {
+                vec2 gpsPointSize = (${window.innerWidth > 900 ? 0.03 : 0.06} * displaySize) / totalSize; 
+                float d = max(0.0, 1.0 - length(abs(display_uv - gpsPositionRelativeCoordinates) / gpsPointSize));
+                vec4 addedGpsPositionColor = mix(vec4(0.0), vec4(d * getGpsPositionColor(d), d), float(gpsPositionEnabled));
+                colormapped = addedGpsPositionColor.rgb + mix(colormapped, vec3(0.0), easeOut(addedGpsPositionColor.a));
             }
 
-            float p = clamp((datavalue - colormapLowerBound) / (colormapUpperBound - colormapLowerBound), 0.0, 1.0);
-            p = mix(p, 1.0 - p, float(colormapFlipped));
-            float checkerboard = float(int(floor(10.0*(local_tile_uv.x)) + floor(10.0*(local_tile_uv.y))) % 2) * 0.2 + 0.4;
-            vec3 colormapped = mix(mix(texture(colormap, vec2(p, 0.0)).rgb, vec3(0.2), float(datavalue == NAN_REPLACEMENT_VALUE)), vec3(checkerboard), float(datavalue == NOT_LOADED_REPLACEMENT_VALUE || hideData));
-
-            // GPS position
-            vec2 pointSize = (${window.innerWidth > 900 ? 0.03 : 0.06} * displaySize) / totalSize; 
-            float d = max(0.0, 1.0 - length(abs(display_uv - gpsPositionRelativeCoordinates) / pointSize));
-            vec4 addedGpsPositionColor = mix(vec4(0.0), vec4(d * getGpsPositionColor(d), d), float(gpsPositionEnabled));
-
-            gl_FragColor = vec4(addedGpsPositionColor.rgb + vec3(lightStrength) + mix(colormapped, vec3(0.0), easeOut(addedGpsPositionColor.a)), 1.0);
+            gl_FragColor = vec4(colormapped + vec3(lightStrength), 1.0);
+            // gl_FragColor *= float(is_in_ttv) * 0.5 + 0.5;
         }
     `
+    
+        return shader;
+    }
+
+    updateCameras(widthOverride: number = 0, heightOverride: number = 0) {
+        const w = widthOverride > 0 ? widthOverride : this.getWidth();
+        const h = heightOverride > 0 ? heightOverride : this.getHeight();
+        if (this.getCurrentCamera() instanceof OrthographicCamera) {
+            const aspect = w / h;
+            let frustumWidth = this.orthographicCameraFrustumSize * aspect;
+            let frustumHeight = this.orthographicCameraFrustumSize;
+            if (this.context.singleFaceMode) {
+                frustumWidth = 1;
+                frustumHeight = 1;
+            }
+            const c = this.getCurrentCamera() as OrthographicCamera;
+            c.left = frustumWidth / - 2;
+            c.right = frustumWidth / 2;
+            c.top = frustumHeight / 2;
+            c.bottom = frustumHeight / - 2;
+            c.updateProjectionMatrix();
+        } else {
+           (this.getCurrentCamera() as any).aspect = w / h;
+            this.getCurrentCamera().updateProjectionMatrix();
+        }
     }
 
     onWindowResize() {
         if (this.printTemplateDownloading) {
             return;
         }
-        if (this.context.isometricMode) {
-            this.updateOrthographicCamera();
-        } else {
-           (this.mainCamera as any).aspect = this.getWidth() / this.getHeight();
-        }
-        this.mainCamera.updateProjectionMatrix();
+        this.updateCameras();
         this.renderer.setSize(this.getWidth(), this.getHeight());
         this.renderer.setPixelRatio(window.devicePixelRatio);
         this.context.interaction.updateLabelPositions();
+        this.context.interaction.updateToolbarPosition();
+        this.context.interaction.updateTimeSeriesChartPosition();
+        this.requestRender(false);
+    }
+
+    private newCubeMaterial3D(isBlockBasedVolumeRenderingIntermediateCube: boolean = false, existingUniforms: any | null = null, depthPass: boolean = false, pickPass: boolean = false) {
+        // Material
+        const shader = getVolumeRenderShader(this.context.useHalfFloatsForTile3d);
+        const uniforms = existingUniforms ?? UniformsUtils.clone(shader.uniforms);
+
+        // Only initialize colormap when we created a fresh uniforms object.
+        if (!existingUniforms) {
+            uniforms['colormap'].value = new DataTexture(this.colormapData, this.colormapData.length / 4, 1, RGBAFormat);
+            uniforms['cubeScale'].value = this.context.cubeScale;
+        }
+
+        const material = new ShaderMaterial({
+            uniforms: uniforms,
+            vertexShader: shader.vertexShader,
+            fragmentShader: shader.fragmentShader,
+            defines: depthPass ? { DEPTH_PASS: 1 } : (pickPass ? { PICK_PASS: 1 } : { COLOR_PASS: 1 }),
+            glslVersion: GLSL3,
+            transparent: true,
+            // depthTest: false,
+            // depthWrite: false,
+            side: FrontSide // main pass needs backfaces; shadow pass should write nearest depth
+        });
+
+        // if (depthPass) {
+        //     material.shadowSide = BackSide;
+        // }
+
+        return material;
+    }
+
+    setVolumeRenderingShaderUseQuantileOverAbsoluteThreshold(useQuantile: boolean) {
+        this.tile3dVolumeRenderedCube.material.uniforms['useQuantileOverAbsoluteThreshold'].value = useQuantile;
+        this.volumeRenderingUseQuantileOverAbsoluteThreshold = useQuantile;
         this.requestRender();
     }
-    
+
+    setVolumeRenderingShaderQuantileThreshold(newQuantile: number) {
+        this.tile3dVolumeRenderedCube.material.uniforms['quantileThreshold'].value = newQuantile; // For ISO renderstyle
+        this.volumeRenderingQuantileThreshold = newQuantile;
+        this.requestRender();
+    }
+
+    setVolumeRenderingShaderAbsoluteThreshold(newThreshold: number) {
+        this.tile3dVolumeRenderedCube.material.uniforms['absoluteThreshold'].value = newThreshold; // For ISO renderstyle
+        this.volumeRenderingAbsoluteThreshold = newThreshold;
+        this.requestRender();
+    }
+
+    setVolumeRenderingShaderRange(newMin: number | null, newMax: number | null) {
+        if (newMin != null) {
+            this.tile3dVolumeRenderedCube.material.uniforms['rangeLowerThreshold'].value = newMin;
+            this.volumeRenderingRangeLowerThreshold = newMin;
+        }
+        if (newMax != null) {
+            this.tile3dVolumeRenderedCube.material.uniforms['rangeUpperThreshold'].value = newMax;
+            this.volumeRenderingRangeUpperThreshold = newMax;
+        }
+        this.requestRender();
+    }
+
     private newCubeMaterial() {
         const newDummyData = () => {
             return new Float32Array(1);
         }
         const newDummyTexture = () => {
-            const b = new DataArrayTexture(newDummyData());
+            const b = new DataTexture(newDummyData());
             b.type = FloatType;
             b.format = RedFormat;
             return b;
         }
+        
+        const uniforms = {
+            lod: { value: 0 },
+            tileSizesFromTtvs: { value: Array.from(Array(MAXIMUM_SUPPORTED_LOD + 1), () => new Vector2()) },
+            tileOffsetsFromTtvs: { value: Array.from(Array(MAXIMUM_SUPPORTED_LOD + 1), () => new Vector2()) },
+            displaySize: { value: new Vector2() },
+            displayOffset: { value: new Vector2() },
+            totalSize: { value: new Vector2() },
+            lightStrength: { value: 0.0 },
+            colormapLowerBound: { value: 0.0 },
+            colormapUpperBound: { value: 0.0 },
+            overflowX: { value: false },
+            overflowY: { value: false },
+            formatIsRgb: { value: false },
+            colormapFlipped: { value: false },
+            hideData: { value: true },
+            colormap: { value: new DataTexture(this.colormapData, this.colormapData.length / 4, 1, RGBAFormat) },
+            gpsPositionEnabled: { value: false },
+            gpsPositionRelativeCoordinates: { value: new Vector2() }
+        }
+
+        for (let lod = 0; lod <= MAXIMUM_SUPPORTED_LOD; lod++) {
+            (uniforms as any)[`${TILES_TEXTURE_NAME}${lod}`] = { value: newDummyTexture() };
+        }
+
         return new ShaderMaterial( {
-            uniforms: {
-                tilesLod0: { value: newDummyTexture() },
-                tilesLod1: { value: newDummyTexture() },
-                tilesLod2: { value: newDummyTexture() },
-                tilesLod3: { value: newDummyTexture() },
-                tilesLod4: { value: newDummyTexture() },
-                tilesLod5: { value: newDummyTexture() },
-                tilesLod6: { value: newDummyTexture() },
-                lod: { value: 0 },
-                displaySize : { value: new Vector2() },
-                displayOffset : { value: new Vector2() },
-                totalSize : { value: new Vector2() },
-                lightStrength: { value: 0.0 },
-                colormapLowerBound : { value: 0.0 },
-                colormapUpperBound : { value: 0.0 },
-                overflowX : { value: false },
-                overflowY : { value: false },
-                colormapFlipped : { value: false },
-                hideData : { value: true },
-                colormap : { value: new DataTexture(this.colormapData, this.colormapData.length / 4, 1, RGBAFormat) },
-                gpsPositionEnabled : { value: false },
-                gpsPositionRelativeCoordinates: { value: new Vector2() }
-            },
+            uniforms: uniforms,
     
             vertexShader: this.vertexShader(),
             fragmentShader: this.fragmentShader()
@@ -1510,64 +1123,427 @@ class CubeRendering {
     }
 
     updateGpsPosition(relativeLatitude: number, relativeLongitude: number) {
-        this.cube.material[0].uniforms["gpsPositionRelativeCoordinates"].value = new Vector2(relativeLongitude, relativeLatitude);
-        this.cube.material[0].uniforms["gpsPositionEnabled"].value = true;
-        this.requestRender();
+        this.tile2dFaceRenderedCube.material[0].uniforms["gpsPositionRelativeCoordinates"].value = new Vector2(relativeLongitude, relativeLatitude);
+        this.tile2dFaceRenderedCube.material[0].uniforms["gpsPositionEnabled"].value = true;
+        this.requestRender(false);
     }
     
     disableGpsPosition() {
-        this.cube.material[0].uniforms["gpsPositionEnabled"].value = false;
+        this.tile2dFaceRenderedCube.material[0].uniforms["gpsPositionEnabled"].value = false;
     }
 
     updateColormapOptions(newLowerBound: number, newUpperBound: number, flipped: boolean) {
         for (let face = 0; face < 6; face++) {
-            this.cube.material[face].uniforms["colormapLowerBound"].value = newLowerBound;
-            this.cube.material[face].uniforms["colormapUpperBound"].value = newUpperBound;
-            this.cube.material[face].uniforms["colormapFlipped"].value = flipped;
+            this.tile2dFaceRenderedCube.material[face].uniforms["colormapLowerBound"].value = newLowerBound;
+            this.tile2dFaceRenderedCube.material[face].uniforms["colormapUpperBound"].value = newUpperBound;
+            this.tile2dFaceRenderedCube.material[face].uniforms["colormapFlipped"].value = flipped;
         }
+        this.tile3dVolumeRenderedCube.material.uniforms["colormapLowerBound"].value = newLowerBound;
+        this.tile3dVolumeRenderedCube.material.uniforms["colormapUpperBound"].value = newUpperBound;
+        this.tile3dVolumeRenderedCube.material.uniforms["colormapFlipped"].value = flipped;
     }
 
     updateColormapTexture(newColormap: Uint8Array) {
         this.colormapData.set(newColormap);
         for (let face = 0; face < 6; face++) {
-            this.cube.material[face].uniforms["colormap"].value.needsUpdate = true;
+            this.tile2dFaceRenderedCube.material[face].uniforms["colormap"].value.needsUpdate = true;
         }
+        this.tile3dVolumeRenderedCube.material.uniforms["colormap"].value.needsUpdate = true;
     }
 
-    requestRender() {
+    private inactivityTimerThreshold: number = 1000 * 60 * 2; // 2 minutes
+    private inactivityTimer: number | null = null;
+
+
+    private blockBasedRenderPassCurrent: number = 0;
+    private blockBasedRenderLod: number = 0;
+
+    private readonly blockBasedRenderTilesPerPassShape: Vector3 = new Vector3(1,1,1); // later: (2, 2, 2); 
+    
+    private blockBasedRenderPasses: MultiBlockRenderPass[] = [];
+
+    private startBlockBasedVolumeRenderingIfNecessary() {
+        console.log("#### Volume viz render update ");
+
+        const viewOrSelectionOrLodChanged = true;
+
+        if (!viewOrSelectionOrLodChanged) {
+            console.log("#### Volume viz view render: no changes detected, not restarting block-based volume rendering.");
+            return;   
+        }
+        console.log("#### Volume viz view render: RESTARTING with new set of render passes.");
+        
+        const visibleTiles = this.context.interaction.getVisibleTiles3d();
+        const lightPositionInData = 
+            this.renderWorldCoordinatesToDataCoordinates(this.frontLight.position.clone())
+                .addScalar(0.5)
+                .multiply(this.context.interaction.cubeSelection.getDisplaySizeVector3d())
+                .add(this.context.interaction.cubeSelection.getDisplayOffsetVector3d());
+
+        const lod = 0; // wip, smarter later
+
+        const renderPasses = MultiBlockRenderPass.from(lod, visibleTiles, this.blockBasedRenderTilesPerPassShape, lightPositionInData);
+        if (renderPasses.length > this.BLOCK_BASED_VOLUME_RENDER_MAX_RENDER_PASSES) {
+            console.error("#### Volume viz view render: too many unique partitions for block-based volume rendering, aborting.");
+            return;
+        }
+        this.blockBasedRenderPasses = renderPasses;
+        this.blockBasedRenderLod = lod; 
+        this.blockBasedRenderPassCurrent = 0;
+
+        this.triggerDownloadsForNextBlockBasedVolumeRenderingPass();
+    }
+
+    private triggerDownloadsForNextBlockBasedVolumeRenderingPass() {
+        if (this.blockBasedRenderPassCurrent >= this.blockBasedRenderPasses.length) {
+            console.log("#### Volume viz view render: no more passes needed.");
+            // all done
+            return;
+        }
+
+        const currentPass = this.blockBasedRenderPasses[this.blockBasedRenderPassCurrent];
+        const tilesRenderedInThisPass: Tile3D[] = currentPass.tiles;
+
+        const m = this.tile3dVolumeRenderedCube.material;
+        // m.uniforms["displaySize"]
+        // currentPass.tileTextureView.updateUniforms({ offsets: this.tile3dSimpleVolumeRenderingCube.material.uniforms[`tileOffsetsFromTtvs`], sizes: this.tile3dSimpleVolumeRenderingCube.material.uniforms[`tileSizesFromTtvs`]})
+
+        console.log("#### Volume viz view render: triggering tile downloads for pass ", this.blockBasedRenderPassCurrent + 1, " of ", this.blockBasedRenderPasses.length, " with ", tilesRenderedInThisPass.length, " tiles.");
+
+        // trigger downloads & put float into storage - once full
+        this.context.interaction.triggerTileDownloads3d(tilesRenderedInThisPass);
+    }
+
+    requestRender(hasDataOrDataSelectionChanged: boolean = true) {
+        // this.context.log(`${performance.now()}: requestRender`);
+
+        if (this.context.orchestrationMasterMode) {
+            if (this.inactivityTimer) {
+                clearTimeout(this.inactivityTimer);
+            }
+            this.inactivityTimer = window.setTimeout(() => {
+                this.onInactivityTimeout();
+            }, this.inactivityTimerThreshold);
+        }
+        
         this.renderRequested = true;
+        if (hasDataOrDataSelectionChanged) {
+            this.shadowRenderRequested = true;
+        }
         if (this.context.interaction) {
             this.context.interaction.resetRenderedAfterAllTilesDownloaded();
         }
     }
     
-    private animate() {
-        requestAnimationFrame(this.animate.bind(this));
+    onInactivityTimeout() {
+        this.inactivityTimer = null;
+        this.context.interaction.selectInitialCube();
+    }
 
-        if (this.maxRangeIndicatorAnimationsPlaying) {
-            const delta = this.animationClock.getDelta();
-            for (let i = 0; i < this.maxRangeIndicatorAnimationMixers.length; i++) {
-                this.maxRangeIndicatorAnimationMixers[i].update(delta);
-            }
-            this.maxRangeIndicatorAnimationsPlaying = this.maxRangeIndicatorAnimationActions.some((action) => {
-                return action.isRunning();
-            });
-            this.updateMaxRangeIndicatorPositionAndScale();
+    private animate() {
+        if (this.maxRangeIndicators.updateAnimations(this.context.interaction, this.dimensionOverflow)) {
             this.renderRequested = true;
         }
     
+        if (this.volumeRenderingEnabled && this.pending3dPick) {
+            this.pending3dPick = false;
+            this.pickRing3d.requestPickRender();
+        }
+
+        const pickResults = this.pickRing3d.poll();
+        if (pickResults.length) {
+            const latest = pickResults[pickResults.length - 1];
+            this.receivePick3d(latest.x, latest.y, latest.z, latest.hit, latest.featureId);
+        }
+
         if (this.renderRequested) {
             this.renderRequested = false;
             this.render();
         }
+
+        requestAnimationFrame(this.animate.bind(this));
+    }
+
+    private receivePick3d(x: number, y: number, z: number, hit: boolean, featureId: number) {
+        // this.context.log(`Received 3D pick at (${x}, ${y}, ${z}), hit: ${hit}, featureId: ${featureId}`);
+        this.context.interaction.receivePick3d(new Vector3(x, y, z), hit, featureId);
+        this.tile3dVolumeRenderedCube.material.uniforms["pickedPosition"].value.set(x, y, z);
+        this.tile3dVolumeRenderedCube.material.uniforms["pickedPositionActive"].value = hit;
+        this.tile3dVolumeRenderedCube.material.uniforms["pickedPositionFeatureId"].value = featureId; // todo: handle featureId 0
+        this.renderRequested = true;
+    }
+
+    hidePick3d() {
+        this.tile3dVolumeRenderedCube.material.uniforms["pickedPositionActive"].value = false;
+        this.renderRequested = true;
     }
 
     getCurrentCamera() {
-        return this.printTemplateDownloading ? this.printTemplateCamera : this.mainCamera;
+        if (this.printTemplateDownloading) {
+            return this.printTemplateCamera;
+        } else if (this.context.isometricMode) {
+            return this.orthographicCamera;
+        } else {
+            return this.perspectiveCamera;
+        }
     }
 
+    private volumeRenderTarget!: WebGLArrayRenderTarget;
+    private volumeRenderCamera!: OrthographicCamera;
+
+
+    renderMultiBlockPassIfReady(justDownloadedTile: Tile3D) {
+        const currentPass = this.blockBasedRenderPasses[this.blockBasedRenderPassCurrent];
+        if (!currentPass.setTileFinishedDownloading(justDownloadedTile)) {
+            // not part of current pass or not all tiles ready yet
+            return;
+        }
+        console.log("#### Rendering block-based volume rendering pass ", this.blockBasedRenderPassCurrent + 1, " of ", this.blockBasedRenderPasses.length);
+
+        // this.tile3dBlockBasedVolumeRenderingIntermediateCube.material.uniforms[`${TILES_TEXTURE_NAME}0`].value.needsUpdate = true;
+
+        // const clipBoundary = this.context.interaction.getClipBoundariesForTiles3d([justDownloadedTile])[0];
+
+        // this.tile3dBlockBasedVolumeRenderingIntermediateCube.material.uniforms[`minClipBoundary`].value.set(clipBoundary.xMin, clipBoundary.yMin, clipBoundary.zMin);
+        // this.tile3dBlockBasedVolumeRenderingIntermediateCube.material.uniforms[`maxClipBoundary`].value.set(clipBoundary.xMax, clipBoundary.yMax, clipBoundary.zMax);
+        // console.log(`Set clip boundaries to min(${clipBoundary.xMin}, ${clipBoundary.yMin}, ${clipBoundary.zMin}) max(${clipBoundary.xMax}, ${clipBoundary.yMax}, ${clipBoundary.zMax})`);
+        // // this.tile3dBlockBasedVolumeRenderingIntermediateCube.material.uniforms["totalSize"].value.set(TILE_SIZE_3D, TILE_SIZE_3D, TILE_SIZE_3D);
+        // const lodFactor = 2 ** tile.lod;
+        // this.tile3dBlockBasedVolumeRenderingIntermediateCube.material.uniforms["displaySize"].value.set(TILE_SIZE_3D * lodFactor, TILE_SIZE_3D * lodFactor, TILE_SIZE_3D * lodFactor);
+        // this.tile3dBlockBasedVolumeRenderingIntermediateCube.material.uniforms["displayOffset"].value.set(0, 0, 0);
+        // this.tile3dBlockBasedVolumeRenderingIntermediateCube.material.uniforms["lod"].value = this.lod3d;
+        
+        const adjustCameraAndTextureSize = (!this.volumeRenderTarget); // TODO: later smarter flag to allow re-render on interaction
+
+
+        let mainCameraNdcWidth = -1;
+        let mainCameraNdcHeight = -1;
+        let mainCameraNdcPosition = new Vector2(0, 0);
+
+        if (adjustCameraAndTextureSize) { 
+
+            this.volumeRenderCamera = new OrthographicCamera(-1, 1, 1, -1, 0.1, 20);
+            // Copy "viewpoint" from main scene camera, but disregard translation
+            this.volumeRenderCamera.quaternion.copy(this.orthographicCamera.quaternion);
+    
+            const distance = 10; 
+            const localZ = new Vector3(0, 0, 1); // Camera's local forward becomes world backward
+            localZ.applyQuaternion(this.volumeRenderCamera.quaternion); // Rotate by camera orientation
+            this.volumeRenderCamera.position.copy(localZ.multiplyScalar(distance)); // Place camera at distance
+    
+            this.volumeRenderCamera.updateMatrixWorld();
+            this.volumeRenderCamera.updateProjectionMatrix();
+    
+            // Adjust left/right/top/bottom to match the ndc size of the intermediate cube
+            const vertexCoordinates = this.tile3dVolumeRenderedCube.geometry.attributes.position;
+            let volumeRenderCameraNdcMin = new Vector2(1, 1);
+            let volumeRenderCameraNdcMax = new Vector2(-1, -1);
+            let mainCameraNdcMin = new Vector2(1, 1);
+            let mainCameraNdcMax = new Vector2(-1, -1);
+            let mainCameraNdcZValues = [];
+            for (let i = 0; i < vertexCoordinates.count; i += 1) {
+                const worldX = vertexCoordinates.getX(i);
+                const worldY = vertexCoordinates.getY(i);
+                const worldZ = vertexCoordinates.getZ(i);
+                const vertexWorld = new Vector3(worldX, worldY, worldZ);
+                const ndcVolumeRenderCamera = vertexWorld.clone().project(this.volumeRenderCamera);
+                volumeRenderCameraNdcMin.x = Math.min(volumeRenderCameraNdcMin.x, ndcVolumeRenderCamera.x);
+                volumeRenderCameraNdcMax.x = Math.max(volumeRenderCameraNdcMax.x, ndcVolumeRenderCamera.x);
+                volumeRenderCameraNdcMin.y = Math.min(volumeRenderCameraNdcMin.y, ndcVolumeRenderCamera.y);
+                volumeRenderCameraNdcMax.y = Math.max(volumeRenderCameraNdcMax.y, ndcVolumeRenderCamera.y);
+                const ndcMainCamera = vertexWorld.clone().project(this.orthographicCamera);
+                mainCameraNdcMin.x = Math.min(mainCameraNdcMin.x, ndcMainCamera.x);
+                mainCameraNdcMax.x = Math.max(mainCameraNdcMax.x, ndcMainCamera.x);
+                mainCameraNdcMin.y = Math.min(mainCameraNdcMin.y, ndcMainCamera.y);
+                mainCameraNdcMax.y = Math.max(mainCameraNdcMax.y, ndcMainCamera.y);
+                mainCameraNdcZValues.push(ndcMainCamera.z);
+            }
+            this.volumeRenderCamera.left = volumeRenderCameraNdcMin.x;
+            this.volumeRenderCamera.right = volumeRenderCameraNdcMax.x;
+            this.volumeRenderCamera.top = volumeRenderCameraNdcMax.y;
+            this.volumeRenderCamera.bottom = volumeRenderCameraNdcMin.y;
+            this.volumeRenderCamera.updateProjectionMatrix();
+            
+            mainCameraNdcHeight = mainCameraNdcMax.y - mainCameraNdcMin.y;
+            mainCameraNdcWidth = mainCameraNdcMax.x - mainCameraNdcMin.x;
+            mainCameraNdcPosition = new Vector2(
+                (mainCameraNdcMin.x + mainCameraNdcMax.x) / 2,
+                (mainCameraNdcMin.y + mainCameraNdcMax.y) / 2
+            );
+
+            const meanNdcZ = mainCameraNdcZValues.reduce((a, b) => a + b, 0) / mainCameraNdcZValues.length;
+
+            
+            for (let billboard of this.blockBasedVolumeRenderingImposterBillboards) {
+                if (billboard.userData.lod == justDownloadedTile.lod) {
+                    const billboardDepth = meanNdcZ + billboard.userData.renderPass * 0.001; // first pass in front of second pass
+                    const billboardMaterial = billboard.material as ShaderMaterial;
+                    billboardMaterial.uniforms["ndcWidth"].value = mainCameraNdcWidth;
+                    billboardMaterial.uniforms["ndcHeight"].value = mainCameraNdcHeight;
+                    billboardMaterial.uniforms["ndcPosition"].value = mainCameraNdcPosition;
+                    billboardMaterial.uniforms["ndcDepth"].value = billboardDepth;
+                }
+            }
+
+            console.log(`Adjusted volume render camera to left=${this.volumeRenderCamera.left}, right=${this.volumeRenderCamera.right}, top=${this.volumeRenderCamera.top}, bottom=${this.volumeRenderCamera.bottom}`);
+        }
+
+
+        if (!this.volumeRenderTarget) {
+            const depth = this.blockBasedRenderPasses.length;
+            const width = Math.ceil(this.getWidth() * mainCameraNdcWidth);
+            const height = Math.ceil(this.getHeight() * mainCameraNdcHeight);
+            this.volumeRenderTarget = new WebGLArrayRenderTarget(width, height, depth, { // TODO: or write directly to texture array?
+                minFilter: LinearFilter,
+                magFilter: LinearFilter,
+                format: RGBAFormat,
+                type: UnsignedByteType,
+                depthBuffer: false,
+                stencilBuffer: false,
+                generateMipmaps: false
+            });
+            this.volumeRenderTarget.texture.wrapS = ClampToEdgeWrapping;
+            this.volumeRenderTarget.texture.wrapT = ClampToEdgeWrapping;
+            this.volumeRenderTarget.texture.minFilter = LinearFilter;
+            this.volumeRenderTarget.texture.magFilter = LinearFilter;
+            this.volumeRenderTarget.texture.generateMipmaps = false;
+
+            this.renderer.initRenderTarget(this.volumeRenderTarget);
+            console.log(`Created volume render target`, this.volumeRenderTarget);
+        }
+
+        const previousClearColor = this.renderer.getClearColor(new Color());
+        const previousClearAlpha = this.renderer.getClearAlpha();
+
+        this.renderer.setRenderTarget(this.volumeRenderTarget, this.blockBasedRenderPassCurrent);
+        this.renderer.setClearColor(new Color(0, 0, 0), 0);
+        this.renderer.clearColor();
+
+        // hide everything except for the simple volume rendering cube
+        const visibilityMap = new Map<Object3D, boolean>();
+        this.scene.children.forEach((child) => {
+            visibilityMap.set(child, child.visible);
+            child.visible = child === this.tile3dVolumeRenderedCube;
+        });
+
+        // print uniforms
+        for (const uniformName in this.tile3dVolumeRenderedCube.material.uniforms) {
+            const uniformValue = this.tile3dVolumeRenderedCube.material.uniforms[uniformName].value;
+            console.log(`Volume render uniform ${uniformName}:`, uniformValue);
+        }
+
+        this.renderer.render(this.scene, this.volumeRenderCamera);
+
+        // restore visibility
+        this.scene.children.forEach((child) => {
+            child.visible = visibilityMap.get(child) || false;
+            if (child == this.tile3dVolumeRenderedCube) {
+                child.visible = false;
+            }
+        });
+
+        const subCubeImposterBillboard = this.blockBasedVolumeRenderingImposterBillboards.find((b) => {
+            return b.userData.renderPass == this.blockBasedRenderPassCurrent && b.userData.lod == justDownloadedTile.lod;
+        });
+
+        if (!subCubeImposterBillboard) {
+            console.error(`Could not find subCubeImposterBillboard for render pass ${this.blockBasedRenderPassCurrent} and lod ${justDownloadedTile.lod}`);
+            return;
+        }
+        
+        subCubeImposterBillboard.material.uniforms["viewTile"].value = this.volumeRenderTarget.texture; 
+        subCubeImposterBillboard.material.uniforms["viewTile"].value.needsUpdate = true;
+        subCubeImposterBillboard.material.uniforms["layer"].value = this.blockBasedRenderPassCurrent;
+        console.log("viewTile texture set on imposter billboard material:", subCubeImposterBillboard.material.uniforms["viewTile"].value);
+    
+        // console.log(`Updated imposter billboard for render pass ${this.blockBasedRenderPassCurrent} and lod ${justDownloadedTile.lod} with rendered texture. - size: ${texture.image.width}x${texture.image.height} pixels.`);
+        this.renderer.setRenderTarget(null);
+        this.renderer.setClearColor(previousClearColor, previousClearAlpha); // todo: unify with rest of app
+
+        this.blockBasedRenderPassCurrent += 1;
+        console.log(`Completed block-based volume rendering pass ${this.blockBasedRenderPassCurrent} / ${this.blockBasedRenderPasses.length}.`);
+
+        this.triggerDownloadsForNextBlockBasedVolumeRenderingPass();
+    }
+
+    requestPick3d(x: number, y: number) {
+        this.pending3dPick = true;
+        this.pending3dPickMousePosition.set(x, y);
+    }
+
+    private renderPickPass() {
+        if (!this.volumeRenderingEnabled || this.tile3dVolumeRenderedCube.visible == false) {
+            console.warn("Skipping pick pass because volume rendering is not enabled or the volume rendered cube is not visible.");
+            return;
+        }
+
+        // render single pixel fragment into pick buffer
+        // - pick frame buffer is already bound by caller
+        const c = this.getCurrentCamera();
+        c.setViewOffset(
+            this.getWidth(), 
+            this.getHeight(),
+            this.pending3dPickMousePosition.x,
+            this.pending3dPickMousePosition.y,
+            1,
+            1
+        );
+        // render only the cube with the pick material
+        c.layers.set(this.cube3dPickRenderLayer); 
+        this.scene.overrideMaterial = this.tile3dVolumeRenderedCubePickMaterial;
+        this.renderer.render(this.scene, c);
+        this.scene.overrideMaterial = null;
+        c.layers.set(0);
+        c.clearViewOffset();
+    }
+
+    private shadowRenderRequested: boolean = false;
+
     private render() {
-        this.renderer.render(this.scene, this.getCurrentCamera());;
+        if (this.shadowRenderRequested && 
+                this.tile3dVolumeRenderedCube.customDepthMaterial && 
+                this.volumeRenderingEnabled && 
+                this.tile3dVolumeRenderedCube.visible &&
+                this.is3dLodMultiBlockRendered(this.lod3d) == false) 
+        {
+            this.renderer.shadowMap.needsUpdate = true;
+            (this.tile3dVolumeRenderedCube.customDepthMaterial as ShaderMaterial).needsUpdate = true;
+            this.frontLight.shadow.camera.updateProjectionMatrix();
+            this.shadowRenderRequested = false;
+        } 
+
+        const lightDirWorld = new Vector3().subVectors(this.frontLight.position, this.frontLight.target.position).normalize();
+
+        this.tile3dVolumeRenderedCube.material.uniforms["lightDepthMap"].value = this.frontLight.shadow.map?.texture;
+        this.tile3dVolumeRenderedCube.material.uniforms["lightMatrix"].value = this.frontLight.shadow.matrix;
+        this.tile3dVolumeRenderedCube.material.uniforms["lightDepthMapIsRgba"].value = this.frontLight.shadow.map?.texture.format === RGBAFormat;
+        this.tile3dVolumeRenderedCube.material.uniforms["lightDirection"].value = lightDirWorld;
+
+        // WIP: view-based lighting, probably needs more in-depth changes later
+        // this.tile3dBlockBasedVolumeRenderingIntermediateCube.material.uniforms["lightDepthMap"].value = this.frontLight.shadow.map?.texture;
+        // this.tile3dBlockBasedVolumeRenderingIntermediateCube.material.uniforms["lightMatrix"].value = this.frontLight.shadow.matrix;
+        // this.tile3dBlockBasedVolumeRenderingIntermediateCube.material.uniforms["lightDepthMapIsRgba"].value = this.frontLight.shadow.map?.texture.format === RGBAFormat;
+        // this.tile3dBlockBasedVolumeRenderingIntermediateCube.material.uniforms["lightDirection"].value = lightDirWorld;
+
+        // if (this.volumeRenderingEnabled) {
+        //     this.tile3dSimpleVolumeRenderingCube.visible = this.is3dLodMultiBlockRendered(this.lod3d) == false;
+        // }
+
+        // this.statsPanel.begin();
+
+        this.renderer.setRenderTarget(null);
+        // this.renderer.clear(true, true, true);
+
+        // // print uniforms
+        // for (const uniformName in this.tile3dSimpleVolumeRenderingCube.material.uniforms) {
+        //     const uniformValue = this.tile3dSimpleVolumeRenderingCube.material.uniforms[uniformName].value;
+        //     console.log(`Volume render uniform ${uniformName}:`, uniformValue);
+        // }
+        
+        this.renderer.render(this.scene, this.getCurrentCamera());
+        
+        // this.statsPanel.end();
+
         if (this.allTilesDownloaded) {
             this.allTilesDownloaded = false;
             this.context.interaction.setRenderedAfterAllTilesDownloaded();
@@ -1595,13 +1571,13 @@ class CubeRendering {
     }
     
     private getVertexCoordinatesFromFace(face: CubeFace): Vector3[] {
-        let pos = this.cube.geometry.attributes.position;
+        let pos = this.tile2dFaceRenderedCube.geometry.attributes.position;
         const resultArray = [];
         const offset = face * 4;
         for (let i = 0; i < 4; i++) {
             const vertexIndex = i + offset;
             const vertexLocal = new Vector3(pos.getX(vertexIndex), pos.getY(vertexIndex), pos.getZ(vertexIndex));
-            const vertexGlobal = this.cube.localToWorld(vertexLocal);
+            const vertexGlobal = this.tile2dFaceRenderedCube.localToWorld(vertexLocal);
             resultArray.push(vertexGlobal);
             // if (this.renderDebugCubes && face == CubeFace.Left) {
             //     this.debugCubes[i].position.copy(vertexGlobal);
@@ -1742,7 +1718,7 @@ class CubeRendering {
                 labelDirectionDimensions[dimension] = (dominantFace == CubeFace.Front || dominantFace == CubeFace.Back) ? Dimension.Y : Dimension.Z;
             } else if (dimension == Dimension.Y) {
                 if (dominantFace == CubeFace.Top || dominantFace == CubeFace.Bottom) {
-                    const chooseLon = Math.abs(Math.round((this.mainCamera.rotation.z / Math.PI) * 2)) % 2 == 1;
+                    const chooseLon = Math.abs(Math.round((this.getCurrentCamera().rotation.z / Math.PI) * 2)) % 2 == 1;
                     labelDirectionDimensions[dimension] = chooseLon ? Dimension.X : Dimension.Z;
                 } else {
                     labelDirectionDimensions[dimension] = (dominantFace == CubeFace.Front || dominantFace == CubeFace.Back) ? Dimension.X : Dimension.Z;
@@ -1828,27 +1804,50 @@ class CubeRendering {
     
     hideData() {
         for (let face = 0; face < 6; face++) {
-            this.cube.material[face].uniforms["hideData"].value = true;
+            this.tile2dFaceRenderedCube.material[face].uniforms["hideData"].value = true;
         }
     }
 
     showDataForFace(face: CubeFace) {
-        this.cube.material[face].uniforms["hideData"].value = false;
+        this.tile2dFaceRenderedCube.material[face].uniforms["hideData"].value = false;
     }
 
     private getVisuallyDominantFace() {
-        const b = this.mainCamera.position.toArray().map((a: number) => Math.abs(a));
+        const c = this.getCurrentCamera();
+        const b = c.position.toArray().map(a => Math.abs(a));
         const max = Math.max(...b);
-        if (max == Math.abs(this.mainCamera.position.x)) {
-            return Math.sign(this.mainCamera.position.x) > 0 ? CubeFace.Front : CubeFace.Back;
+        if (max == Math.abs(c.position.x)) {
+            return Math.sign(c.position.x) > 0 ? CubeFace.Front : CubeFace.Back;
         }
-        if (max == Math.abs(this.mainCamera.position.y)) {
-            return Math.sign(this.mainCamera.position.y) > 0 ? CubeFace.Top : CubeFace.Bottom;
+        if (max == Math.abs(c.position.y)) {
+            return Math.sign(c.position.y) > 0 ? CubeFace.Top : CubeFace.Bottom;
         }
-        return Math.sign(this.mainCamera.position.z) > 0 ? CubeFace.Left : CubeFace.Right;
+        return Math.sign(c.position.z) > 0 ? CubeFace.Left : CubeFace.Right;
     }
 
-    private updateLodForFace(face: CubeFace, allowEarlyRefresh: boolean = true) {
+    private updateLod2dForFace(face: CubeFace, allowEarlyRefresh: boolean = true) {
+        const onScreenPixels = this.getPixelAmountOfFace(face);
+        this.faceCurrentPixels[face] = onScreenPixels;
+    
+        const cubeEdgeLength = this.displayQuality * Math.sqrt(onScreenPixels);
+    
+        const dataSize = this.context.interaction.cubeSelection.getDisplaySizeVector2d(face);
+        const dataPixelAmount = dataSize.x * dataSize.y;
+        const dataEdgeLength = Math.sqrt(dataPixelAmount);
+        const edgeRatio = Math.log2(dataEdgeLength / cubeEdgeLength);
+        let lod = clamp(Math.round(edgeRatio), 0, this.context.interaction.getMaxLod2d());
+
+        if (lod != this.lods2d[face]) {
+            this.context.log(`[${CubeFace[face]}] New lod level: ${lod} (previously ${this.lods2d[face]})`);
+            const earlyRefresh = lod > this.lods2d[face] && this.lods2d[face] != INVALID_LOD_PLACEHOLDER;
+            this.lods2d[face] = lod;
+            if (earlyRefresh && allowEarlyRefresh) {
+                this.revealLod2dForFace(face);
+            }
+        }
+    }
+
+    private getPixelAmountOfFace(face: CubeFace) {
         const verticesGlobal = this.getVertexCoordinatesFromFace(face);
         const verticesScreen = verticesGlobal.map((worldPosition) => this.getScreenCoordinatesFromWorldPosition(worldPosition));
         verticesScreen.forEach(p => p.setZ(0));
@@ -1856,23 +1855,72 @@ class CubeRendering {
         const firstHalf = new Triangle(verticesScreen[0], verticesScreen[1], verticesScreen[2]);
         const secondHalf = new Triangle(verticesScreen[1], verticesScreen[2], verticesScreen[3]);
         const onScreenPixels = (firstHalf.getArea() + secondHalf.getArea()) * Math.pow(devicePixelRatio, 2);
-        this.faceCurrentPixels[face] = onScreenPixels;
+        return onScreenPixels;
+    }
+
+    is3dLodMultiBlockRendered(lod3d: number) {
+        // const totalSize = this.context.interaction.cubeDimensions.totalSize();
+        // const tileSize = TILE_SIZE_3D * Math.pow(2, lod3d);
+        // const maxEdgeTileSize = 2;
+        // const lodThreshold = Math.log2(Math.max(totalSize.x, totalSize.y, totalSize.z) / (tileSize * maxEdgeTileSize));
+
+
+        const multiBlockRendered = false;
+        // console.log(`Will be multi-block rendered: ${multiBlockRendered}`);
+        return multiBlockRendered;
+    }
+
+    private updateLod3d() {
+        const verticesGlobal = [];
+        for (let face = 0; face < 6; face++) {
+            verticesGlobal.push(...this.getVertexCoordinatesFromFace(face));
+        }
+        
+        const verticesScreen = verticesGlobal.map(this.getScreenCoordinatesFromWorldPosition, this);
+        // get minimum and maximum XY values
+        const minX = Math.min(...verticesScreen.map(v => v.x));
+        const maxX = Math.max(...verticesScreen.map(v => v.x));
+        const minY = Math.min(...verticesScreen.map(v => v.y));
+        const maxY = Math.max(...verticesScreen.map(v => v.y));
+        
+        const onScreenPixels = (maxX - minX) * (maxY - minY);
+        const cubeEdgeLength = Math.sqrt(onScreenPixels);
     
-        const cubeEdgeLength = this.displayQuality * Math.sqrt(onScreenPixels);
-    
-        const dataSize = this.context.interaction.cubeSelection.getSizeVector(face);
-        const dataPixelAmount = dataSize.x * dataSize.y;
-        const dataEdgeLength = Math.sqrt(dataPixelAmount);
-        const edgeRatio = Math.log2(dataEdgeLength / cubeEdgeLength);
-        const lod = clamp(Math.round(edgeRatio), 0, this.context.interaction.selectedCubeMetadata.max_lod);
-    
-        if (lod != this.lods[face]) {
-            this.context.log(`[${CubeFace[face]}] New lod level: ${lod} (previously ${this.lods[face]})`);
-            const earlyRefresh = lod > this.lods[face];
-            this.lods[face] = lod;
-            if (earlyRefresh && allowEarlyRefresh) {
-                this.revealLodForFace(face);
+        const dataSize = this.context.interaction.cubeSelection.getDisplaySizeVector3d();
+
+        const dataPixelAmount = dataSize.x * dataSize.y * dataSize.z;
+        const dataEdgeLength = Math.pow(dataPixelAmount, 1/3);
+        const preClampLod = Math.log2(dataEdgeLength / cubeEdgeLength); // maybe add offset here, to decrease hardware load
+        const desiredLod = clamp(Math.round(preClampLod), 0, this.context.interaction.getMaxLod3d());
+
+        let chosenLod = -1;
+        for (let checkedLod = desiredLod; checkedLod <= this.context.interaction.getMaxLod3d(); checkedLod++) {
+            if (this.possibleToRenderLod3d(checkedLod)) {
+                chosenLod = checkedLod;
+                break;
             }
+        }
+
+        if (chosenLod != this.lod3d) {
+            const multiBlockRendered = this.is3dLodMultiBlockRendered(chosenLod);
+            this.context.log(`############### [3D] New lod level: ${chosenLod} (previously ${this.lod3d}) - will be multi-block rendered: ${multiBlockRendered}`);
+            this.context.interaction.showResolutionChangeInfo(chosenLod);
+            
+            if (!multiBlockRendered) {
+                this.updateTileTextureView3D(chosenLod);
+
+                // sanity check, should always be possible to render
+                // if (!updatedTtvPossibleToRender) {
+                //     console.error(`tileTextureView does not allow rendering at desiredLod ${chosenLod}`);
+                //     return;
+                // }
+            }
+            this.lod3d = chosenLod;
+            
+            // const earlyRefresh = desiredLod > this.lod3d;
+            // if (earlyRefresh && allowEarlyRefresh) { // dont early refresh for 3d lod changes?
+            //     this.revealLod3d();
+            // }
         }
     }
     
@@ -1881,6 +1929,7 @@ class CubeRendering {
         //     return this.faceVisibility[face] = face != CubeFace.Back;
         // }
         const camera = this.getCurrentCamera();
+        
         let visible = 
             (face == CubeFace.Front  && camera.position.x >  0.5) ||
             (face == CubeFace.Back   && camera.position.x < -0.5) ||
@@ -1889,6 +1938,10 @@ class CubeRendering {
             (face == CubeFace.Left   && camera.position.z >  0.5) ||
             (face == CubeFace.Right  && camera.position.z < -0.5);
         
+        if (this.context.singleFaceMode) {
+            visible = this.context.singleFace == face;
+        }
+
         if (this.faceVisibility[face] != visible) {
             this.context.log(`[${CubeFace[face]}] Visible: ${visible} (previously: ${this.faceVisibility[face]})`)
             this.faceVisibility[face] = visible;
@@ -1896,17 +1949,6 @@ class CubeRendering {
         }
     }
 
-    updateVisibilityAndLodsWithoutTriggeringDownloads() {
-        if (typeof this.context.interaction.cubeSelection === "undefined" || !this.context.interaction.fullyLoaded) {
-            return;
-        }
-        for (let face = 0; face < 6; face++) {
-            this.updateVisibilityForFace(face);
-            if (this.faceVisibility[face]) {
-                this.updateLodForFace(face, false);
-            }
-        }
-    }
 
     updateVisibilityAndLodsDebounced(): void {
         if (this.debouncedVisibilityAndLodUpdateTimeoutHandler) {
@@ -1918,34 +1960,44 @@ class CubeRendering {
         }, 100);
     }
 
-    updateVisibilityAndLods() {
+    updateVisibilityAndLods(triggerTileDownloads: boolean = true) {
         if (typeof this.context.interaction.cubeSelection === "undefined" || !this.context.interaction.fullyLoaded) {
             return;
+        }
+        if (this.volumeRenderingEnabled) {
+            this.updateLod3d();
         }
         for (let face = 0; face < 6; face++) {
             this.updateVisibilityForFace(face);
             if (this.faceVisibility[face]) {
-                this.updateLodForFace(face);
+                this.updateLod2dForFace(face, triggerTileDownloads);
             }
         }
-        this.context.interaction.triggerTileDownloads();
+        
+        this.volumeRenderingFloor.visible = this.volumeRenderingEnabled && !(this.getCurrentCamera().position.y < 0.0);
+
+        if (triggerTileDownloads) {
+            if (this.volumeRenderingEnabled) {
+                if (this.is3dLodMultiBlockRendered(this.lod3d)) {
+                    this.startBlockBasedVolumeRenderingIfNecessary();
+                } else {
+                    this.context.interaction.triggerTileDownloads3d();
+                }
+            } else {
+                this.context.interaction.triggerTileDownloads2d(this.context.singleFaceMode ? this.context.singleFace : undefined);
+            }
+        }
     }
 
     startDownloadPrintTemplate() {
         if (this.printTemplateDownloading) {
             return;
         }
-        this.setCubeLightingEnabled(false);
+        this.set2dCubeLightingEnabled(false);
         this.context.interaction.showPrintTemplateLoader()
         this.context.log("Start downloading print template");
         this.renderer.setSize(2048, 2048);
-        // const forcedAspect = 1;
-        // if (this.context.isometricMode) {
-        //     this.updateOrthographicCamera(forcedAspect);
-        // } else {
-        //    (this.camera as any).aspect = forcedAspect;
-        // }
-        // this.camera.updateProjectionMatrix();
+        this.updateCameras(2048, 2048);
         this.renderer.setPixelRatio(1);
 
         this.printTemplateCurrentFace = -1;
@@ -1955,17 +2007,6 @@ class CubeRendering {
         this.processNextFaceForPrintTemplate();
     }
 
-    private updateOrthographicCamera(aspectOverride: number | undefined = undefined) {
-        const minimumVisibleInWorldUnits = 2.2;
-        const aspect = aspectOverride || this.getWidth() / this.getHeight();
-        const height = aspect > 1 ? minimumVisibleInWorldUnits : minimumVisibleInWorldUnits / aspect;
-        const width = aspect > 1 ? aspect * minimumVisibleInWorldUnits : minimumVisibleInWorldUnits;
-        (this.mainCamera as OrthographicCamera).left = width / -2;
-        (this.mainCamera as OrthographicCamera).right = width / 2;
-        (this.mainCamera as OrthographicCamera).top = height / 2;
-        (this.mainCamera as OrthographicCamera).bottom = height / -2;
-        this.mainCamera.updateProjectionMatrix();
-    }
 
     async processNextFaceForPrintTemplate() {
         if (this.printTemplateCurrentFace !== -1) {
@@ -1980,7 +2021,7 @@ class CubeRendering {
         this.context.interaction.applyCameraPreset(`Single Face (${CubeFace[this.printTemplateCurrentFace]})`, this.printTemplateCamera);
         this.updateVisibilityAndLods();
         await this.updateRegionBorderPositionAndResolution();
-        this.requestRender();
+        this.requestRender(false);
     }
 
     private printTemplateJustDownloaded = false;
@@ -1988,12 +2029,12 @@ class CubeRendering {
     async finishDownloadPrintTemplate() {
         this.printTemplateDownloading = false;
         this.printTemplateJustDownloaded = true;
-        // this.context.interaction.applyCameraPreset();
+        this.context.interaction.applyCameraPreset();
         this.onWindowResize();
-        this.setCubeLightingEnabled();
+        this.set2dCubeLightingEnabled();
         this.updateVisibilityAndLods();
         this.context.interaction.updateLabelPositions();
-        this.requestRender();
+        this.requestRender(false);
         this.context.log("Reset camera & renderer, now generating print template", this.printTemplateResults.length);
         let svg = await this.context.interaction.getPrintTemplateSvg();
         this.context.log("Got svg template", svg.length, svg.substring(0, 100));
@@ -2061,28 +2102,145 @@ class CubeRendering {
         return this.renderer.domElement.toDataURL("image/png"); // works only if this.renderer.render() was just called
     }
     
-    revealLodForFace(face: CubeFace) {
-        this.cube.material[face].uniforms["lod"].value = this.lods[face];
+    revealLod2dForFace(face: CubeFace) {
+        this.tile2dFaceRenderedCube.material[face].uniforms["lod"].value = this.lods2d[face];
+        this.tile2dFaceRenderedCubeTileTextureViews[face][this.lods2d[face]].applyOffsetToShader();
+        this.requestRender();
+    }
+
+    revealLod3d() {
+        if (!this.volumeRenderingEnabled) {
+            console.warn("Tried to reveal 3D LOD while volume rendering is disabled");
+            return;
+        }
+        if (this.first3dLodReveal) {
+            this.tile2dFaceRenderedCube.visible = false;
+            this.tile3dVolumeRenderedCube.visible = true;
+            this.first3dLodReveal = false;
+        }
+        if (this.playAnimationOnNext3dLodReveal) {
+            this.context.interaction.setVolumeVizUiLoaderVisibility(false);
+            this.startThresholdAnimation();
+            this.playAnimationOnNext3dLodReveal = false;
+        }
+        this.context.interaction.hideResolutionChangeInfo();
+        this.tile3dVolumeRenderedCubeTileTextureViews[this.lod3d].applyOffsetToShader();
+        this.tile3dVolumeRenderedCube.material.uniforms["lod"].value = this.lod3d;
+        this.requestRender();
+    }
+
+    private startThresholdAnimation() {
+        const animationEnabled = true;
+
+        const targetLengthMs = 2500;
+        let startTime = 0;
+        let timer = undefined as number | undefined;
+
+        const range = this.context.interaction.getVolumeRenderingAbsoluteThresholdRange();
+        if (this.context.interaction.getVolumeRenderingUseQuantileOverAbsoluteThreshold()) {
+            // if user switched to quantile before animation started, skip it since calling setSign is not safe 
+            return;
+        }
+        this.context.interaction.setVolumeRenderingThresholdSign(1);
+        this.context.interaction.setVolumeRenderingAbsoluteThreshold(range.min);
+
+        if (!animationEnabled) {
+            return;
+        }
+        this.context.interaction.toggleThresholdSliderAnimations(false); // prevent slider from jumping around while animation is playing
+
+        const mean = this.context.tileData.observedMeanValue;
+        const target = lerp(0.7 * (range.max - range.min) + range.min, mean, 0.5);
+
+        const initialParameterId = this.context.interaction.selectedParameterId;
+        const initialCubeId = this.context.interaction.selectedCube.id;
+        const shouldStopAnimation = () => {
+            return !this.volumeRenderingEnabled || 
+                this.context.interaction.selectedParameterId != initialParameterId ||
+                this.context.interaction.selectedCube.id != initialCubeId;
+        }
+
+        timer = window.setInterval(() => {
+            if (shouldStopAnimation()) {
+                if (timer) {
+                    window.clearInterval(timer);
+                    this.context.interaction.toggleThresholdSliderAnimations(true);
+                }
+            }
+            if (startTime == 0) {
+                startTime = performance.now();
+            }
+            const progress = clamp((performance.now() - startTime) / targetLengthMs, 0, 1);
+            // const easedProgress = 1.0 - Math.pow(1.0 - progress, 3);
+            const easedProgress = progress < 0.5 ? 2 * progress * progress : 1 - Math.pow(-2 * progress + 2, 2) / 2; // easeInOutQuad
+            const t = lerp(range.min, target, easedProgress);
+            this.context.interaction.setVolumeRenderingAbsoluteThreshold(t);
+            if (progress >= 1) {
+                if (timer) {
+                    window.clearInterval(timer);
+                    this.context.interaction.toggleThresholdSliderAnimations(true);
+                }
+            }
+        }, 35);
+    }
+
+    setActivePolygonFeatureMap(array: Uint32Array, width: number, height: number, bounds: { minX: number, maxX: number, minY: number, maxY: number }) {
+        if (!this.context.interaction.cubeDimensions.isGeospatialContextValid()) {
+            this.context.log("Tried to set active polygon feature map, but geospatial context is not valid");
+            return;
+        }
+        this.context.log("Setting active polygon feature map with size", width, height, "and bounds", bounds);
+
+        let texture = this.tile3dVolumeRenderedCube.material.uniforms["polygonFeatureMap"].value as DataTexture | null;
+        if (!texture || texture.image.width != width || texture.image.height != height) {
+            if (texture) {
+                texture.dispose();
+            }
+            texture = new DataTexture(array, width, height, RedIntegerFormat, UnsignedIntType);
+            // texture.flipY = true;
+            texture.needsUpdate = true;
+            this.tile3dVolumeRenderedCube.material.uniforms["polygonFeatureMap"].value = texture;
+        } else {
+            texture.image.data = array;
+            texture.needsUpdate = true;
+        }
+
+        // bounds in geo units, shader needs them in UV coordinates, so convert them
+        const xGeospatialTotalRange = this.context.interaction.cubeDimensions.getGeospatialTotalRangeX();
+        const yGeospatialTotalRange = this.context.interaction.cubeDimensions.getGeospatialTotalRangeY();
+
+        const minUvX = (bounds.minX - xGeospatialTotalRange.getFirst()) / (xGeospatialTotalRange.getLast() - xGeospatialTotalRange.getFirst());
+        const maxUvX = (bounds.maxX - xGeospatialTotalRange.getFirst()) / (xGeospatialTotalRange.getLast() - xGeospatialTotalRange.getFirst());
+        const minUvY = (bounds.minY - yGeospatialTotalRange.getFirst()) / (yGeospatialTotalRange.getLast() - yGeospatialTotalRange.getFirst());
+        const maxUvY = (bounds.maxY - yGeospatialTotalRange.getFirst()) / (yGeospatialTotalRange.getLast() - yGeospatialTotalRange.getFirst());
+
+        this.context.log("Converted bounds to UV coordinates", { minUvX, maxUvX, minUvY, maxUvY });
+        this.tile3dVolumeRenderedCube.material.uniforms["polygonFeatureMapBoundsMin"].value.set(minUvX, minUvY);
+        this.tile3dVolumeRenderedCube.material.uniforms["polygonFeatureMapBoundsMax"].value.set(maxUvX, maxUvY);
     }
 
     getCurrentlyShownLodForFace(face: CubeFace) {
-        return this.cube.material[face].uniforms["lod"].value;
-    }
-    
-    dataShown() {
-        return this.cube.material[5].uniforms["hideData"].value == false;
+        return this.tile2dFaceRenderedCube.material[face].uniforms["lod"].value;
     }
     
     setAllTilesDownloaded() {
+        this.context.log("   --  All tiles downloaded");
         this.allTilesDownloaded = true;
     }
 
     updateOverflowSettings(overflowX: boolean, overflowY: boolean, overflowZ: boolean, allowWidgetUpdate: boolean = true) {
         this.dimensionOverflow = [overflowX, overflowY, overflowZ];
-        for (let face = 0; face < 6; face++) {
-            this.cube.material[face].uniforms["overflowX"].value = face < 4 ? overflowX : overflowY;
-            this.cube.material[face].uniforms["overflowY"].value = face < 2 ? overflowY : overflowZ;
+        if (this.volumeRenderingEnabled) {
+            this.dimensionOverflow = [false, false, false];
         }
+        for (let face = 0; face < 6; face++) {
+            this.tile2dFaceRenderedCube.material[face].uniforms["overflowX"].value = this.getOverflowForFace(face).x;
+            this.tile2dFaceRenderedCube.material[face].uniforms["overflowY"].value = this.getOverflowForFace(face).y;
+        }
+        this.tile3dVolumeRenderedCube.material.uniforms["overflowX"].value = overflowX;
+        this.tile3dVolumeRenderedCube.material.uniforms["overflowY"].value = overflowY;
+        this.tile3dVolumeRenderedCube.material.uniforms["overflowZ"].value = overflowZ;
+        
         if (this.context.widgetMode && allowWidgetUpdate) {
             this.updateWidgetModelDimensionWrapSettings(overflowX, overflowY, overflowZ)
         }
@@ -2131,11 +2289,12 @@ class CubeRendering {
     }
     
     adjustCameraPresetToCube(position: Vector3) {
-        if (this.mainCamera instanceof OrthographicCamera) {
+        const c = this.getCurrentCamera();
+        if (c instanceof OrthographicCamera) {
             return;
         }
 
-        this.mainCamera.updateMatrixWorld();
+        // c.updateMatrixWorld();
         const realMaxCanvasSize = Math.min(this.getWidth(), this.getHeight() + 300); // height is less important for UI etc.
         const extraPaddingForSmallCanvas = lerp(0.2, 0, (realMaxCanvasSize - 400) / 600); // 400px = +0.2, 700px = +0.1, 1000px = +0.0
         const paddingWorldUnits = 0.1 + Math.max(0, extraPaddingForSmallCanvas); // in world units
@@ -2153,7 +2312,7 @@ class CubeRendering {
         ];
 
         // Convert FOV to radians
-        const fovRad = this.mainCamera.fov * (Math.PI / 180);
+        const fovRad = c.fov * (Math.PI / 180);
         const halfFovRad = fovRad / 2;
         const cameraDirection = new Vector3().copy(position).normalize();
         
@@ -2161,31 +2320,19 @@ class CubeRendering {
         let maxDistance = 0;
         
         for (const corner of corners) {
-            // Project the corner onto the camera direction to find distance along camera axis
             const projectionLength = corner.dot(cameraDirection);
             
-            // Calculate the perpendicular distance from the corner to the camera axis
             const perpendicularVector = corner.clone().sub(cameraDirection.clone().multiplyScalar(projectionLength));
             const perpendicularDistance = perpendicularVector.length();
             
-            // Calculate required distance for this corner to be visible
-            // For vertical dimension
             let verticalDistance = perpendicularDistance / Math.tan(halfFovRad);
-            
-            // For horizontal dimension, adjust for aspect ratio
-            let horizontalDistance = perpendicularDistance / (Math.tan(halfFovRad) * this.mainCamera.aspect);
-            
-            // Use the larger of the two distances
+            let horizontalDistance = perpendicularDistance / (Math.tan(halfFovRad) * c.aspect);
             const cornerDistance = Math.max(verticalDistance, horizontalDistance);
-            
-            // Add the projection length to get the total distance needed
             const totalDistance = cornerDistance + projectionLength;
-            
-            // Keep track of the maximum distance needed
+
             maxDistance = Math.max(maxDistance, totalDistance);
         }
         
-        // Position the camera at the calculated distance
         position.setLength(maxDistance);
     }
     
@@ -2195,6 +2342,269 @@ class CubeRendering {
         this.widgetModeWidth = width;
         this.widgetModeHeight = height;
         this.onWindowResize();
+    }
+    
+    setDataType(dataType: DataType) {
+        for (let i = 0; i < 6; i++) {
+            this.tile2dFaceRenderedCube.material[i].uniforms["formatIsRgb"].value = (dataType == DataType.RGB);
+        }
+    }
+
+    setVolumeRenderStyle(renderStyle: number) {
+        this.tile3dVolumeRenderedCube.material.uniforms["renderstyle"].value = renderStyle;
+        this.volumeRenderingRenderStyle = renderStyle;
+        this.requestRender();
+    }
+
+    getVolumeRenderingShaderThresholdSign() {
+        return this.volumeRenderingThresholdSign;
+    }
+
+    getVolumeRenderingAbsoluteThreshold() {
+        return this.volumeRenderingAbsoluteThreshold;
+    }
+
+    getVolumeRenderingQuantileThreshold() {
+        return this.volumeRenderingQuantileThreshold;
+    }
+
+    getVolumeRenderingUseQuantileOverAbsoluteThreshold() {
+        return this.volumeRenderingUseQuantileOverAbsoluteThreshold;
+    }
+
+    setVolumeRenderingShaderThresholdSign(thresholdSign: number) {
+        this.tile3dVolumeRenderedCube.material.uniforms["thresholdSign"].value = thresholdSign;
+        this.volumeRenderingThresholdSign = thresholdSign;
+        this.requestRender();
+    }
+
+    isWindowPositionOverCube(windowPosition: Vector2) {
+        const x = (windowPosition.x / this.getWidth()) * 2 - 1;
+        const y = -(windowPosition.y / this.getHeight()) * 2 + 1;
+        // Build a picking ray from NDC
+        const ray = new Ray();
+        const raycaster = new Raycaster();
+        raycaster.setFromCamera(new Vector2(x, y), this.getCurrentCamera());
+        ray.copy(raycaster.ray); // origin, direction (normalized)
+
+        // Unit cube AABB at the origin
+        const boxMin = new Vector3(-0.5, -0.5, -0.5); // assumes unit cube
+        const boxMax = new Vector3( 0.5,  0.5,  0.5);
+
+        // Ray–AABB slab intersection (t in [0, +inf))
+        const invDir = new Vector3(
+            1 / ray.direction.x,
+            1 / ray.direction.y,
+            1 / ray.direction.z
+        );
+
+        let tmin = 0;               // start on the ray
+        let tmax = Infinity;        // no far cap
+
+        // For each axis, compute intersection interval and clip
+        for (let i = 0; i < 3; i++) {
+            const origin = (i === 0) ? ray.origin.x : (i === 1) ? ray.origin.y : ray.origin.z;
+            const invD   = (i === 0) ? invDir.x     : (i === 1) ? invDir.y     : invDir.z;
+            const minB   = (i === 0) ? boxMin.x     : (i === 1) ? boxMin.y     : boxMin.z;
+            const maxB   = (i === 0) ? boxMax.x     : (i === 1) ? boxMax.y     : boxMax.z;
+
+            let t1 = (minB - origin) * invD;
+            let t2 = (maxB - origin) * invD;
+            // Ensure t1 <= t2
+            if (t1 > t2) { const tmp = t1; t1 = t2; t2 = tmp; }
+
+            tmin = Math.max(tmin, t1);
+            tmax = Math.min(tmax, t2);
+            if (tmax < tmin) return false; // disjoint
+        }
+
+        // If the nearest intersection is in front of the ray origin, we have a hit
+        return tmax >= tmin && tmax >= 0;
+    }
+    
+    addTimeSeriesMarker(timeSeriesId: number, face: CubeFace, nearestValidX: number, nearestValidY: number, color: string) {
+        if (!this.pinModel) {
+            console.warn("Pin model not loaded yet, cannot add time series marker");
+            return;
+        }
+        const markerParent = new Object3D();
+        markerParent.position.set(0, -nearestValidY, -nearestValidX);
+        
+        const markerMesh = this.pinModel.clone();
+        markerMesh.material = this.contextLayerMarkerMaterial.clone();
+        markerMesh.material.color = new Color(color); 
+
+        markerParent.add(markerMesh);
+        this.context.log("Adding time series marker at", markerParent.position);
+        this.contextLayerParentFront.add(markerParent);
+        markerParent.userData = { timeSeriesId, isTimeSeriesMarker: true, isContextLayerObject: true };
+        return markerParent;
+    }
+    
+    removeTimeSeriesMarker(marker: Object3D) {
+        this.contextLayerParentFront.remove(marker);
+        marker.traverse((child) => {
+            if ((child as Mesh).geometry) {
+                (child as Mesh).geometry.dispose();
+            }
+        });
+    }
+
+
+    createTileTextureViews() {
+        const targetTextureSize = Math.min(4096, this.maxTextureSize2D); // cap to have high initial responsiveness, at the cost of potentially more TTV updates later
+
+        this.tile2dFaceRenderedCubeTileTextureViews = [];
+        for (let face = 0; face < 6; face++) {
+            this.tile2dFaceRenderedCubeTileTextureViews[face] = [];
+            for (let lod = 0; lod <= this.context.interaction.getMaxLod2d(); lod++) {
+                this.tile2dFaceRenderedCubeTileTextureViews[face].push(new TileTextureView2D(face, lod, targetTextureSize, this.context.interaction.cubeDimensions.tiles2dForFace(face, lod), this.tile2dFaceRenderedCube.material[face].uniforms["tileOffsetsFromTtvs"], this.tile2dFaceRenderedCube.material[face].uniforms["tileSizesFromTtvs"]));
+            }
+        }
+        this.context.log("created tileTextureViews2d", this.tile2dFaceRenderedCubeTileTextureViews);
+
+        this.tile3dVolumeRenderedCubeTileTextureViews = [];
+        for (let lod = 0; lod <= this.context.interaction.getMaxLod3d(); lod++) {
+            this.tile3dVolumeRenderedCubeTileTextureViews.push(TileTextureView3D.createWithDynamicSize(lod, this.context.interaction.cubeDimensions.total3dTiles(lod), this.context.interaction.cubeDimensions.totalSize(), { offsets: this.tile3dVolumeRenderedCube.material.uniforms["tileOffsetsFromTtvs"], sizes: this.tile3dVolumeRenderedCube.material.uniforms["tileSizesFromTtvs"] }));
+        }
+    }
+
+    private lastVisibleTiles2dHashed: string = "";
+    private lastVisibleTiles3dHashed: string = "";
+
+    visibleTiles2dChanged(visibleTiles: Tile2D[]) {
+        const visibleTilesHashed = visibleTiles.map(t => t.getHashKey()).sort().join(",");
+        if (visibleTilesHashed === this.lastVisibleTiles2dHashed) {
+            return;
+        }
+        this.lastVisibleTiles2dHashed = visibleTilesHashed;
+        this.updateTileTextureView2dFromVisibleTiles(visibleTiles);
+    }
+
+    visibleTiles3dChanged(visibleTiles: Tile3D[]) {
+        const visibleTilesHashed = visibleTiles.map(t => t.getHashKey()).sort().join(",");
+        if (visibleTilesHashed === this.lastVisibleTiles3dHashed) {
+            return;
+        }
+        this.lastVisibleTiles3dHashed = visibleTilesHashed;
+        this.updateTileTextureView3dFromVisibleTiles(visibleTiles);
+    }
+
+    updateTileTextureView3dFromVisibleTiles(visibleTiles: Tile3D[]) {
+        const lod = visibleTiles[0].lod;
+        const ttv = this.tile3dVolumeRenderedCubeTileTextureViews[lod];
+
+        const ttvCoversAll = visibleTiles.every(t => ttv.containsTile(t))
+        if (!ttvCoversAll || this.tile3dVolumeRenderedCubeTileTextureViews[lod].needsInitialUpdate()) {
+            this.updateTileTextureView3D(lod);
+        }
+    }
+
+    updateTileTextureView2dFromVisibleTiles(visibleTiles: Tile2D[]) {
+        for (let face = 0; face < 6; face++) {
+            const faceTiles = visibleTiles.filter(t => t.face == face);
+            if (faceTiles.length == 0) {
+                continue;
+            }
+            const lod = faceTiles[0].lod;
+            const ttv = this.tile2dFaceRenderedCubeTileTextureViews[face][lod];
+
+            const ttvCoversAll = faceTiles.every(t => ttv.containsTile(t))
+            if (!ttvCoversAll || this.tile2dFaceRenderedCubeTileTextureViews[face][lod].needsInitialUpdate()) {
+                this.updateTileTextureView2d(face, lod);
+            }
+        }
+    }
+
+    private updateTileTextureView2d(face: CubeFace, lod: number) {
+        const updateResult = this.tile2dFaceRenderedCubeTileTextureViews[face][lod].updateOffset(this.context.interaction.cubeSelection, this.dimensionOverflow);
+        if (updateResult.changed && !updateResult.firstOffsetUpdate) {
+            this.context.log("TileTextureView2d for face", CubeFace[face], " lod", lod, "is updating: ", updateResult);
+            this.context.tileData.moveTileStorageDataAfterTileTextureView2dUpdate(face, lod, updateResult);
+            this.context.tileData.resetTileDownloadMapsAfterTileTextureView2dUpdate(face, lod, updateResult.previousOffset);
+        }
+    }
+
+    possibleToRenderLod3d(lod: number) {    
+        const ttv = this.tile3dVolumeRenderedCubeTileTextureViews[lod];
+        return ttv.possibleToRender(this.context.interaction.cubeSelection.getDisplaySizeVector3d());
+    }
+
+    private updateTileTextureView3D(lod: number) {
+        const updateResult = this.tile3dVolumeRenderedCubeTileTextureViews[lod].updateOffset(this.context.interaction.cubeSelection, this.dimensionOverflow);
+        if (updateResult.changed && !updateResult.firstOffsetUpdate) {
+            this.context.tileData.moveTileStorageDataAfterTileTextureView3dUpdate(lod, updateResult);
+            this.context.tileData.resetTileDownloadMapsAfterTileTextureView3dUpdate(lod, updateResult.previousOffset);
+            // this.context.tileData.resetTile3dDownloadMapsForLod(lod); // not necessary as it will be overwritten
+        }
+    }
+
+    
+    getTileTextureView2dTextureAccessParameters(tile: Tile2D, pixelX: number = 0, pixelY: number = 0): { startIndex: number; indexIncrementPerRow: number; tileInTtv: boolean } {
+        if (!this.tileContainedInTileTextureView2d(tile) || (pixelX < 0 || pixelX >= TILE_SIZE_2D) || (pixelY < 0 || pixelY >= TILE_SIZE_2D)) {
+            return { startIndex: -1, indexIncrementPerRow: -1, tileInTtv: false };
+        }
+        const ttvSizeInTiles = this.getTileTextureView2dSizeInTiles(tile.face, tile.lod);
+
+        const localTileCoords = this.tile2dFaceRenderedCubeTileTextureViews[tile.face][tile.lod].getTilePositionInView(tile);
+        const indexIncrementPerRow = ttvSizeInTiles.x * TILE_SIZE_2D;
+        const startIndex = localTileCoords.x * TILE_SIZE_2D + localTileCoords.y * indexIncrementPerRow * TILE_SIZE_2D + pixelY * indexIncrementPerRow + pixelX;
+        
+        return { startIndex: startIndex, indexIncrementPerRow: indexIncrementPerRow, tileInTtv: true };
+    }
+
+    getTileTextureView3dTextureAccessParameters(tile: Tile3D, pixelX: number = 0, pixelY: number = 0, pixelZ: number = 0): { startIndex: number; indexIncrementPerRow: number; indexIncrementPerSlice: number; tileInTtv: boolean } {
+        if (!this.tileContainedInTileTextureView3d(tile) || (pixelX < 0 || pixelX >= TILE_SIZE_2D) || (pixelY < 0 || pixelY >= TILE_SIZE_2D)) {
+            return { startIndex: -1, indexIncrementPerRow: -1, indexIncrementPerSlice: -1, tileInTtv: false };
+        }
+        const ttvSizeInTiles = this.getTileTextureView3dSize(tile.lod);
+
+        const indexIncrementPerPixelRow = ttvSizeInTiles.x * TILE_SIZE_3D;
+        const indexIncrementPerPixelSlice = ttvSizeInTiles.y * indexIncrementPerPixelRow * TILE_SIZE_3D;
+
+        const localTileCoords = this.tile3dVolumeRenderedCubeTileTextureViews[tile.lod].getTilePositionInView(tile);
+        const startIndex = 
+            localTileCoords.z * indexIncrementPerPixelSlice * TILE_SIZE_3D + 
+            localTileCoords.y * indexIncrementPerPixelRow * TILE_SIZE_3D + 
+            localTileCoords.x * TILE_SIZE_3D + 
+            pixelZ * indexIncrementPerPixelSlice + 
+            pixelY * indexIncrementPerPixelRow + 
+            pixelX;
+        
+        return { startIndex: startIndex, indexIncrementPerRow: indexIncrementPerPixelRow, indexIncrementPerSlice: indexIncrementPerPixelSlice, tileInTtv: true };
+    }
+
+    getTileTextureView2dSizeInTiles(face: number, lod: number) {
+        return this.tile2dFaceRenderedCubeTileTextureViews[face][lod].getSizeInTiles();
+    }
+
+    getTileTextureView2dOffsetInTiles(face: number, lod: number) {
+        return this.tile2dFaceRenderedCubeTileTextureViews[face][lod].getOffsetInTiles();
+    }
+
+    getTileTextureView3dSize(lod: number) {
+        if (this.is3dLodMultiBlockRendered(lod) && this.blockBasedRenderPasses.length > 0) {
+            return this.blockBasedRenderPasses[this.blockBasedRenderPassCurrent].tileTextureView.getSizeInTiles();
+        }
+        const ttv = this.tile3dVolumeRenderedCubeTileTextureViews[lod];
+        return ttv.getSizeInTiles();
+    }
+
+    tileContainedInTileTextureView2d(tile: Tile2D, offsetOverride?: Vector2) {
+        return this.tile2dFaceRenderedCubeTileTextureViews[tile.face][tile.lod].containsTile(tile, offsetOverride);
+    }
+
+    tileContainedInTileTextureView3d(tile: Tile3D, offsetOverride?: Vector3) {
+        return this.tile3dVolumeRenderedCubeTileTextureViews[tile.lod].containsTile(tile, offsetOverride);
+    }
+
+    getTileTextureView3dOffset(lod: number) {
+        const ttv = this.tile3dVolumeRenderedCubeTileTextureViews[lod];
+        return ttv.getOffsetInTiles();
+    }
+
+    getOverflowForFace(face: CubeFace) {
+        return { x: this.dimensionOverflow[face < 4 ? 0 : 1], y: this.dimensionOverflow[face < 2 ? 1 : 2] };
     }
 }
 

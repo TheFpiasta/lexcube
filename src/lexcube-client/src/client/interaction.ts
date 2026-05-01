@@ -16,1334 +16,295 @@
     along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
-import { Camera, Euler, Event, Intersection, IUniform, Object3D, OrthographicCamera, PerspectiveCamera, Vector2, Vector3 } from 'three'
+import { Camera, Euler, Event, Intersection, IUniform, Object3D, OrthographicCamera, PerspectiveCamera, Ray, Raycaster, Vector2, Vector3 } from 'three'
 import { clamp, lerp } from 'three/src/math/MathUtils';
-import noUiSlider, { API, PartialFormatter } from 'nouislider';
-import { CubeFace, Dimension, MAX_ZOOM_FACTOR, positiveModulo, range, TILE_SIZE, API_VERSION, capitalizeString, ANOMALY_PARAMETER_ID_SUFFIX, DEFAULT_COLORMAP, roundDownToSparsity, roundUpToSparsity, roundToSparsity } from './constants';
+import { CubeFace, Dimension, MAX_ZOOM_FACTOR, positiveModulo, range, TILE_SIZE_2D, API_VERSION, capitalizeString, ANOMALY_PARAMETER_ID_SUFFIX, DEFAULT_COLORMAP, TILE_SIZE_3D, roundDownToSparsity, roundUpToSparsity, roundToSparsity, DataType, WATER_RELATED_VARIABLE_KEYWORDS, MAXIMUM_SUPPORTED_LOD, FLOAT_NAN_REPLACEMENT_VALUE, roundToSparsityWithinRange, debounce, RaycastResultType, DeviceOrientation, HALF_FLOAT_NAN_REPLACEMENT_VALUE, NON_EXTREME_QUANTILE_INDEX, QUANTILE_STEP, QUANTILE_RELEVANT_DECIMALS } from './constants';
 import { CubeClientContext } from './client';
-import { Tile } from './tiledata';
-import { OrbitControls } from './OrbitControls';
+import { Tile2D, Tile3D, Tile3DClipBoundary, TileData } from './tiledata';
+import { CameraControls } from './interaction/camera-controls';
+import {
+    CubeDimension,
+    CubeDimensions,
+    CubeDimensionType,
+    CubeTag,
+    GeospatialContext,
+    GeospatialContextCorrection,
+    GeospatialRange,
+    ParameterRange,
+    getDayString,
+    getTimeString,
+} from './core/dimensions';
+import {
+    Parameter,
+    ParameterAttributionMetadata,
+    ParameterColormapMetadata,
+} from './core/parameters';
+import {
+    CubeSelection,
+    SelectionState,
+} from './core/selection';
+import { AnimationParameters } from './core/animation';
 import 'polyfill-array-includes';
 import QRCode from 'qrcode'
-
+import Chart, { Tooltip, TooltipModel } from 'chart.js/auto';
 
 
 import parameterAttributionMetadata from '../content/parameterMetadataAttribution.json'
 import parameterCustomColormapsMetadata from '../content/parameterCustomColormaps.json'
-import defaultColormaps from '../content/default-colormaps.json'
+import { CubeRendering } from './rendering';
+import { ActiveElement } from 'chart.js/dist/plugins/plugin.tooltip';
+import { ColormapUIManager, ColormapUIHostState } from './ui/colormap-ui';
+import { SliderUIManager, SliderUIHostState } from './ui/slider-ui';
+import { AnimationUIManager, AnimationUIHostState } from './ui/animation-ui';
+import { DataValue } from './services/tile-storage';
 
-
-enum GeospatialContextCorrection {
-    None,
-    AddHalfStepAtBothEnds,
-    AddFullStepAtEnd,
+enum ContextLayerInteraction {
+    Click,
+    HoverEnter,
+    HoverLeave,
 }
 
-class AnimationParameters {
-    private parameterRange: ParameterRange;
-    private selectedRange: ParameterRange;
-    private useSelectedRange: boolean;
-    private cubeDimension: CubeDimension;
+enum ExtremeThresholdTarget {
+    Observations,
+    DeviationsFromMSC
+}
 
-    // 3 parameters that can be changed in the UI
-    private visibleWindow: number;
-    private incrementPerStep: number;
-    private fps: number;
+enum ExtremeThresholdType {
+    Absolute,
+    Quantile
+}
 
-    // 2 variables that result from the UI-set parameters
-    private totalSteps!: number;
-    private totalDurationSeconds!: number;
+enum ExtremeSpatialQuantileContext {
+    AllTimeSeries,
+    PcaGroupedTimeSeries,
+    SingleTimeSeries
+}
 
-    private currentStep: number = 0;
+class ExtremeType {
+    readonly id: number;
+    readonly name: string;
+    readonly thresholdTarget: ExtremeThresholdTarget;
+    readonly thresholdType: ExtremeThresholdType;
+    readonly spatialQuantileContext: ExtremeSpatialQuantileContext | null;
 
-    private sparsity: number;
-
-    private updateAnimationDurationLabel: () => void = () => {};
-
-    constructor(dimension: Dimension, cubeDimensions: CubeDimensions, sparsity: number, updateAnimationDurationLabel: () => void) {
-        this.sparsity = sparsity;
-        this.parameterRange = cubeDimensions.getParameterRangeByDimension(dimension);
-        this.cubeDimension = cubeDimensions.getCubeDimensionByDimension(dimension);
-        this.selectedRange = new ParameterRange();
-        this.useSelectedRange = false;
-        this.updateAnimationDurationLabel = updateAnimationDurationLabel;
-        
-        this.visibleWindow = NaN;
-        this.incrementPerStep = NaN;
-        this.fps = 10;
-    }
-
-    initialize() {
-        this.setInitialValues();
-    }
-
-    updateDimension(dimension: Dimension, cubeDimensions: CubeDimensions) {
-        this.cubeDimension = cubeDimensions.getCubeDimensionByDimension(dimension);
-        this.parameterRange = cubeDimensions.getParameterRangeByDimension(dimension);
-        this.selectedRange = new ParameterRange();
-        this.useSelectedRange = false;
-        this.setInitialValues();
-    }
-
-    private setInitialValues() {
-        const dimensionLength = this.getRange().length();
-        const targetSteps = dimensionLength / this.sparsity;
-        this.visibleWindow = roundToSparsity(dimensionLength / 5.0, this.sparsity);
-        this.incrementPerStep = Math.max(roundToSparsity((dimensionLength - this.visibleWindow) / targetSteps, this.sparsity), this.sparsity);
-        this.updateStepsAndDuration();
-    }
-
-    private migrateValuesToNewRange() {
-        this.visibleWindow = clamp(this.visibleWindow, this.getRangeForVisibleWindow()[0], this.getRangeForVisibleWindow()[1]);
-        this.incrementPerStep = clamp(this.incrementPerStep, this.getRangeForIncrementPerStep()[0], this.getRangeForIncrementPerStep()[1]);
-        this.updateStepsAndDuration();
-    }
-
-    private updateStepsAndDuration() {
-        this.totalSteps = Math.ceil((this.getRange().length() - this.visibleWindow) / this.incrementPerStep);
-        this.totalDurationSeconds = this.totalSteps / this.fps;
-        this.updateAnimationDurationLabel();
-    }
-
-    indexDifferenceToString(indexDifference: number) {
-        const diff = Math.round(Math.abs(indexDifference));
-        const difference = this.cubeDimension.getDifferenceString(diff);
-        if (!difference.differenceString) {
-            const d = diff.toFixed(0);
-            return `${d} unit${d == "1" ? "" : "s"}`;
-        }
-        const caPrefix = !difference.isExact ? "ca. " : "";
-        return `${caPrefix}${difference.differenceString} (${Math.round(diff).toFixed(0)} step${diff > 1 ? "s" : ""})`;
-    }
-
-    getRangeForVisibleWindow() {
-        return [this.sparsity, Math.max(this.sparsity, roundToSparsity(this.getRange().length() / 2.0, this.sparsity))];
-    }
-
-    getRangeForIncrementPerStep() { // has to be multiple of sparsity
-        return [this.sparsity, Math.max(this.sparsity, roundToSparsity(this.getRange().length() / 10.0, this.sparsity))];
-    }
-
-    getExponentialRangeFromLinearRange(range: number[]) {
-        const l = range[1] - range[0];
-        const outputRange = [
-            range[0], 
-            roundToSparsity(0.07 * l + range[0], this.sparsity), 
-            roundToSparsity(0.21 * l + range[0], this.sparsity), 
-            roundToSparsity(0.48 * l + range[0], this.sparsity), 
-            range[1]
-        ];
-        return outputRange;
-    }
-
-    getRangeForFps() {
-        return [2, 30];
-    }
-
-    getTotalSteps() {
-        return this.totalSteps;
-    }
-
-    getFps() {
-        return this.fps;
-    }
-
-    getVisibleWindow() {
-        return this.visibleWindow;
-    }
-
-    getDimension(): Dimension {
-        return this.cubeDimension.dimension;
-    }
-
-    getIncrementPerStep() {
-        return this.incrementPerStep;
-    }
-
-    setVisibleWindow(visibleWindow: number) {
-        if (isNaN(visibleWindow)) {
-            return;
-        }
-        this.visibleWindow = roundToSparsity(visibleWindow, this.sparsity);
-        this.updateStepsAndDuration();
-    }
-
-    setIncrementPerStep(incrementPerStep: number) {
-        if (isNaN(incrementPerStep)) {
-            return;
-        }
-        const newIncrementPerStep = roundToSparsity(incrementPerStep, this.sparsity);
-        const r = this.incrementPerStep / newIncrementPerStep;
-        this.currentStep = Math.round(this.currentStep * r);
-        this.incrementPerStep = newIncrementPerStep;
-        this.updateStepsAndDuration();
-    }
-
-    setFps(fps: number) {
-        if (isNaN(fps)) {
-            return;
-        }
-        this.fps = fps;
-        this.updateStepsAndDuration();
-    }
-
-    getFormattedDurationInSeconds() {
-        return this.totalDurationSeconds.toFixed(1);
-    }
-
-    private getRange() {
-        return this.useSelectedRange ? this.selectedRange : this.parameterRange;
-    }
-
-    getAnimationRangeFromStep() {
-        const range = this.getRange();
-        const a = this.incrementPerStep * this.currentStep;
-        const min = roundUpToSparsity(Math.min(range.min + a, range.max - this.visibleWindow - 1), this.sparsity);
-        const max = roundDownToSparsity(min + this.visibleWindow, this.sparsity);
-        return { min, max };
-    }
-    
-    increaseStep() {
-        if (this.currentStep >= this.totalSteps) {
-            return false;
-        }
-        this.currentStep += 1;
-        return true;
-    }
-
-    resetStep() {
-        this.currentStep = -1;
-    }
-
-    updateSelectedRange(range: ParameterRange) {
-        this.selectedRange = range.clone();
-        if (this.useSelectedRange) {
-            this.migrateValuesToNewRange();
-        }
-    }
-
-    setUseSelectedRange(useSelectedRange: boolean) {
-        this.useSelectedRange = useSelectedRange;
-        this.migrateValuesToNewRange();
+    constructor(id: number, name: string, thresholdTarget: ExtremeThresholdTarget, thresholdType: ExtremeThresholdType, spatialQuantileContext: ExtremeSpatialQuantileContext | null = null) {
+        this.id = id;
+        this.name = name;
+        this.thresholdTarget = thresholdTarget;
+        this.thresholdType = thresholdType;
+        this.spatialQuantileContext = spatialQuantileContext;
     }
 }
 
-class GeospatialContext {
-    xRange: GeospatialRange = new GeospatialRange(NaN, NaN);
-    yRange: GeospatialRange = new GeospatialRange(NaN, NaN);
 
-    setGlobalCoverage() {
-        this.xRange.set(-180, 180);
-        this.yRange.set(-90, 90);
+// GeospatialContextCorrection moved to core/dimensions.ts
+
+class TimeSeries {
+    static nextId: number = 1;
+    id: number;
+    face: CubeFace;
+    x: number;
+    y: number;
+    data: number[];
+    labels: string[]; 
+    marker: Object3D | undefined;
+    pointColor: string;
+    private insertedDataLength: number = 0;
+
+    constructor(face: CubeFace, x: number, y: number, pointColor: string) {
+        this.id = TimeSeries.nextId++;
+        this.face = face;
+        this.x = x;
+        this.y = y;
+        this.data = [];
+        this.pointColor = pointColor;
+        this.labels = [];
     }
 
-    setFromDimensions(cubeDimensions: CubeDimensions, xCorrection: GeospatialContextCorrection, yCorrection: GeospatialContextCorrection) {
-        if (!cubeDimensions.x.hasNumericIndices() || !cubeDimensions.y.hasNumericIndices()) {
-            return "Indices are not numeric, not setting geospatial context.";
-        }
-        const xBounds = [cubeDimensions.x.indices[0] as number, cubeDimensions.x.indices[cubeDimensions.x.indices.length - 1] as number];
-        const xAscending = xBounds[0] < xBounds[1];
-        const xMin = Math.min(...xBounds);
-        const xMax = Math.max(...xBounds);
-        const yBounds = [cubeDimensions.y.indices[0] as number, cubeDimensions.y.indices[cubeDimensions.y.indices.length - 1] as number];
-        const yAscending = yBounds[0] < yBounds[1];
-        const yMin = Math.min(...yBounds);
-        const yMax = Math.max(...yBounds);
-
-        const xStep = Math.abs(xMax - xMin) / (cubeDimensions.x.steps - 1);
-        const yStep = Math.abs(yMax - yMin) / (cubeDimensions.y.steps - 1);
-
-        if (xCorrection == GeospatialContextCorrection.AddHalfStepAtBothEnds) {
-            this.xRange.setFromMinMaxAscending(xMin - xStep / 2, xMax + xStep / 2, xAscending);
-        } else if (xCorrection == GeospatialContextCorrection.AddFullStepAtEnd) {
-            this.xRange.setFromMinMaxAscending(xMin, xMax + xStep, xAscending);
-        } else if (xCorrection == GeospatialContextCorrection.None) {
-            this.xRange.setFromMinMaxAscending(xMin, xMax, xAscending);
-        } else {
-            console.error("Unknown geospatial context xCorrection type: " + xCorrection);
-        }
-        if (yCorrection == GeospatialContextCorrection.AddHalfStepAtBothEnds) {
-            this.yRange.setFromMinMaxAscending(yMin - yStep / 2, yMax + yStep / 2, yAscending);
-        } else if (yCorrection == GeospatialContextCorrection.AddFullStepAtEnd) {
-            this.yRange.setFromMinMaxAscending(yMin, yMax + yStep, yAscending);
-        } else if (yCorrection == GeospatialContextCorrection.None) {
-            this.yRange.setFromMinMaxAscending(yMin, yMax, yAscending);
-        } else {
-            console.error("Unknown geospatial context yCorrection type: " + yCorrection);
-        }
-        return `xRange set to [${this.xRange.min}, ${this.xRange.max}] (using correction ${GeospatialContextCorrection[xCorrection]} from ${xBounds[0]} to ${xBounds[1]}). yRange set to [${this.yRange.min}, ${this.yRange.max}] (using correction ${GeospatialContextCorrection[yCorrection]} from ${yBounds[0]} to ${yBounds[1]}).`;
+    getPointColor() {
+        return this.pointColor;
     }
 
-    isValid() {
-        return this.xRange.isValid() && this.yRange.isValid();
+    insertData(newData: number[], zStart: number, cubeInteraction: CubeInteraction) {
+        const insertedLength = Math.min(newData.length, this.data.length - zStart);
+        this.insertedDataLength += insertedLength;
+        this.data.splice(zStart, insertedLength, ...newData.slice(0, insertedLength).map((b) => cubeInteraction.getConvertedDataValue(b)));
+        return this.insertedDataLength >= this.data.length;
+    }
+
+    getRequestedDataRange() {
+        return {
+            indexDimension: Dimension.X,
+            globalX: this.x,
+            globalY: this.y,
+        }
     }
 }
 
-class HoverData {
+// AnimationParameters moved to core/animation.ts
+// GeospatialContext moved to core/dimensions.ts
+
+class PickedDataValue {
+    face: CubeFace | undefined;
+    dataValue: number | Uint8Array;
+    isDataValueNotLoaded: boolean;
+    isDataNan: boolean | boolean[];
+    x: number;
+    y: number;
+    z: number;
+    lod: number;
+    tileX: number;
+    tileY: number;
+    tileZ: number | undefined;
+    localTilePixelX: number;
+    localTilePixelY: number;
+    localTilePixelZ: number | undefined;
+    maximumCompressionError: number | undefined;
+
     constructor() {
         this.dataValue = 0;
         this.isDataValueNotLoaded = false;
+        this.isDataNan = false;
         this.y = 0;
         this.x = 0;
         this.z = 0;
-        this.face = 0;
+        this.lod = 0;
         this.tileX = 0;
         this.tileY = 0;
-        this.pixelX = 0;
-        this.pixelY = 0;
+        this.localTilePixelX = 0;
+        this.localTilePixelY = 0;
         this.maximumCompressionError = 0;
     }
 
-    face: CubeFace;
-    dataValue: number;
-    isDataValueNotLoaded: boolean;
-    y: number;
-    x: number;
-    z: number;
-    tileX: number;
-    tileY: number;
-    pixelX: number;
-    pixelY: number;
-    maximumCompressionError: number | undefined;
+    setFrom2dTileData(cubeSelection: CubeSelection, cubeDimensions: CubeDimensions, rendering: CubeRendering, tileData: TileData, selectedCubeId: string, selectedParameterId: string, face: number, uv: Vector2) {
+        const offset = cubeSelection.getDisplayOffsetVector2d(face).clone();
+        const size = cubeSelection.getDisplaySizeVector2d(face).clone();
+        const hoverPosition = size.multiply(uv).add(offset);
+        hoverPosition.x = positiveModulo(hoverPosition.x, cubeDimensions.totalWidthForFace(face))
+        const lod = rendering.lods2d[face];
+
+        const lodAdjustedTileSize = (Math.pow(2, lod) * TILE_SIZE_2D);
+        const tileX = Math.floor(hoverPosition.x / lodAdjustedTileSize);
+        const tileY = Math.floor(hoverPosition.y / lodAdjustedTileSize);
+        const uvWithinTileX = (hoverPosition.x % lodAdjustedTileSize) / lodAdjustedTileSize;
+        const uvWithinTileY = (hoverPosition.y % lodAdjustedTileSize) / lodAdjustedTileSize;
+        const pixelX = Math.floor(uvWithinTileX * TILE_SIZE_2D);
+        const pixelY = Math.floor(uvWithinTileY * TILE_SIZE_2D);
+        const dv = tileData.getTile2dDataValue(face, lod, tileX, tileY, pixelX, pixelY);
+
+        this.x = (face <= 3) ? hoverPosition.x : cubeSelection.getGuaranteedSparsityValidIndexValueForFace(face);
+        this.y = (face > 3) ? hoverPosition.x : ((face <= 1) ? hoverPosition.y : cubeSelection.getGuaranteedSparsityValidIndexValueForFace(face));
+        this.z = (face > 1) ? hoverPosition.y : cubeSelection.getGuaranteedSparsityValidIndexValueForFace(face);
+        this.face = face;
+        this.tileX = tileX;
+        this.tileY = tileY;
+        this.tileZ = undefined;
+        this.localTilePixelX = pixelX;
+        this.localTilePixelY = pixelY;
+        this.localTilePixelZ = undefined;
+        this.lod = lod;
+
+        const tile = new Tile2D(face, (face <= 1 ? this.z : (face <= 3 ? this.y : this.x)), lod, tileX, tileY, selectedCubeId, selectedParameterId);
+
+        return this.setFromDataValue(tileData, dv, tile);
+    }
+
+    setFrom3dTileData(globalVoxelPosition: Vector3, lod: number, cubeDimensions: CubeDimensions, tileData: TileData, selectedCubeId: string, selectedParameterId: string) {
+        // const offset = cubeSelection.getDisplayOffsetVector3d().clone();
+        // const size = cubeSelection.getDisplaySizeVector3d().clone();
+        globalVoxelPosition.x = positiveModulo(globalVoxelPosition.x, cubeDimensions.totalWidthForFace(CubeFace.Front));
+
+        const lodAdjustedTileSize = (Math.pow(2, lod) * TILE_SIZE_3D);
+        const tileCoords = globalVoxelPosition.clone().divideScalar(lodAdjustedTileSize).floor();
+        const uvWithinTile = globalVoxelPosition.clone().divideScalar(lodAdjustedTileSize);
+        uvWithinTile.sub(uvWithinTile.clone().floor());
+        const pixelWithinTileCoords = uvWithinTile.clone().multiplyScalar(TILE_SIZE_3D).floor();
+        const dv = tileData.getTile3dDataValue(lod, tileCoords.x, tileCoords.y, tileCoords.z, pixelWithinTileCoords.x, pixelWithinTileCoords.y, pixelWithinTileCoords.z);
+
+        this.x = globalVoxelPosition.x;
+        this.y = globalVoxelPosition.y;
+        this.z = globalVoxelPosition.z;
+        this.face = undefined;
+        this.tileX = tileCoords.x;
+        this.tileY = tileCoords.y;
+        this.tileZ = tileCoords.z;
+        this.localTilePixelX = pixelWithinTileCoords.x;
+        this.localTilePixelY = pixelWithinTileCoords.y;
+        this.localTilePixelZ = pixelWithinTileCoords.z;
+        this.lod = lod;
+
+        const tile = new Tile3D(lod, tileCoords.x, tileCoords.y, tileCoords.z, selectedCubeId, selectedParameterId);
+
+        this.setFromDataValue(tileData, dv, tile);
+    }
+
+    isFrom3d() {
+        const is3d = this.tileZ !== undefined && this.localTilePixelZ !== undefined && this.face === undefined;
+        const is2d = this.tileZ === undefined && this.localTilePixelZ === undefined && this.face !== undefined;
+        if (!is3d && !is2d) {
+            console.error("PickedDataValue is neither from 2d nor 3d tile data. This should not happen.");
+        }
+        return is3d;
+    }
+
+    private setFromDataValue(tileData: TileData, dv: DataValue, tile: Tile2D | Tile3D) {
+        this.maximumCompressionError = tileData.maxCompressionErrors.get(tile.getHashKey());
+        
+        this.dataValue = dv.value;
+        this.isDataValueNotLoaded = dv.isDataNotLoaded;
+        this.isDataNan = dv.isDataNan;
+
+        return this;
+    }
+
+    // getValue(cubeInteraction: CubeInteraction, selectedParameter: Parameter) {
+    //     if (this.isDataValueNotLoaded) {
+    //         return NaN;
+    //     } else if (typeof this.dataValue === "number") {
+    //         if (isNaN(this.dataValue) || this.isDataNan) {
+    //             return NaN;
+    //         }
+    //         return cubeInteraction.toFixedNumber(selectedParameter.getConvertedDataValue(this.dataValue));
+    //     } else if (this.dataValue instanceof Uint8Array) {
+    //         return this.dataValue[0];
+    //     }
+    //     throw new Error("No valid value for picked data value.");
+    // }
+
+    getString(cubeInteraction: CubeInteraction, selectedParameter: Parameter, prefix: string = "") {
+        if (this.isDataValueNotLoaded) {
+            return `${prefix}Data not yet loaded`;
+        } else if (typeof this.dataValue === "number") {
+            if (isNaN(this.dataValue) || this.isDataNan) {
+                return `${prefix}No Data`;
+            } else {
+                const value = `${cubeInteraction.toFixed(selectedParameter.getConvertedDataValue(this.dataValue))}`;
+                return `${prefix}${value} ${selectedParameter.getUnitHTML()}`;
+            }
+        } else if (this.dataValue instanceof Uint8Array) {
+            const lines = selectedParameter.getRgbDataValueString(this.dataValue, this.isDataNan);
+            return lines;
+        }
+        return "No valid string for picked data value.";
+    }
 }
 
 
-class SelectionState {
-    cubeId: string | undefined;
-    parameterId: string | undefined;
-    zRange: number[] | undefined;
-    yRange: number[] | undefined;
-    xRange: number[] | undefined;
-}
-
-enum CubeDimensionType {
-    Generic = 0,
-    Time = 1,
-    Latitude = 2,
-    Longitude = 3,
-}
-
-function padDateElement(number: Number, amount: Number = 2) {
-    return `00${number}`.slice(-amount);
-}
-
-function getDayString(date: Date) {
-    return `${padDateElement(date.getUTCDate())}.${padDateElement(date.getUTCMonth() + 1)}.${date.getUTCFullYear()}`;
-}
-
-function getTimeString(date: Date, millisecondsDisplayed: boolean) {
-    return `${padDateElement(date.getUTCHours())}:${padDateElement(date.getUTCMinutes())}:${padDateElement(date.getUTCSeconds())}${millisecondsDisplayed ? `:${padDateElement(date.getUTCMilliseconds(), 3)}` : ""}`;
-}
+// SelectionState, CubeSelection moved to core/selection.ts
+// CubeDimensionType, getDayString, getTimeString moved to core/dimensions.ts
 
 const CSS_TURN_RED_FILTER = "brightness(0) saturate(100%) invert(37%) sepia(72%) saturate(6374%) hue-rotate(344deg) brightness(122%) contrast(117%)";
 
-
-class CubeDimension {
-    private name: string = "Generic Dimension";
-    steps: number;
-    type: CubeDimensionType = CubeDimensionType.Generic;
-    indices: Array<string> | Array<number> | Array<Date>;
-    cubeDimensions: CubeDimensions;
-    flipped: boolean = false;
-    units: string;
-    dimension: Dimension;
-
-    constructor(cubeDimensions: CubeDimensions, dimension: Dimension, name: string, steps: number, indices: Array<any>, attrs: any, type: CubeDimensionType | null = null) {
-        this.cubeDimensions = cubeDimensions;
-        this.dimension = dimension;
-        this.name = name;
-        this.steps = Math.round(steps); // round for cases like 29.999999997
-        this.type = type || this.guessType();
-        this.units = attrs ? this.parseUnits(attrs.units) : "";
-        if (this.type == CubeDimensionType.Time && !isNaN(new Date(indices[0]).getTime())) {
-            this.indices = indices.map((x) => new Date(x));
-        } else {
-            this.indices = indices;
-        }
-        if (this.steps !== this.indices.length) {
-            console.warn("Dimension indices are mismatched to the dimension steps", this);
-        }
-    }
-
-    private parseUnits(units: string) {
-        if (units == "degrees_north" || units == "degrees_east") {
-            return "°";
-        }
-        return units || "";
-    }
-
-    private guessType(): CubeDimensionType {
-        if (this.name == "time") {
-            return CubeDimensionType.Time;
-        } else if (["lat", "latitude"].includes(this.name.toLowerCase())) {
-            return CubeDimensionType.Latitude;
-        } else if (["lon", "longitude"].includes(this.name.toLowerCase())) {
-            return CubeDimensionType.Longitude;
-        }
-        return CubeDimensionType.Generic;
-    }
-
-    private getTimeMetaData() {
-        const totalTimeSpanDays = Math.abs(((this.indices[this.indices.length - 1] as Date).getTime() - (this.indices[0] as Date).getTime()) / (1000 * 60 * 60 * 24));
-        const millisecondsPerStep = Math.abs(((this.indices[this.indices.length - 1] as Date).getTime() - (this.indices[0] as Date).getTime()) / this.indices.length);
-        const daysPerStep = millisecondsPerStep / (60 * 60 * 24 * 1000);
-        const hoursPerStep = millisecondsPerStep / (60 * 60 * 1000);
-        const minutesPerStep = millisecondsPerStep / (60 * 1000);
-        const secondsPerStep = millisecondsPerStep / 1000;
-        return {
-            totalTimeSpanDays,
-            millisecondsPerStep,
-            secondsPerStep,
-            hoursPerStep,
-            minutesPerStep,
-            daysPerStep,
-            monthsRelevant: daysPerStep > 60,
-            weeksRelevant: daysPerStep > 14.5,
-            daysRelevant: daysPerStep > 1,
-            hoursRelevant: hoursPerStep > 1,
-            minutesRelevant: minutesPerStep > 1,
-            secondsRelevant: secondsPerStep >= 1,
-            millisecondsRelevant: secondsPerStep < 1,
-        }
-    }
-
-    private getTimeIndexString(numericIndex: number): string {
-        const indexLabel = this.indices[numericIndex];
-        if (!(indexLabel instanceof Date)) {
-            return `${indexLabel}`;
-        }
-        const timeData = this.getTimeMetaData();
-        return `${timeData.totalTimeSpanDays > 1 ? getDayString(indexLabel as Date) : ""} ${timeData.daysPerStep < 1 ? getTimeString(indexLabel as Date, timeData.millisecondsRelevant) : ""}`.trim();
-    }
-
-    getIndexString(numericIndex: number): string {
-        let roundedIndex = clamp(Math.floor(numericIndex + 0.001), 0, this.steps - 1);
-
-        if (this.type == CubeDimensionType.Longitude && this.cubeDimensions.context.interaction.cubeTags.includes(CubeTag.LongitudeZeroIndexIsGreenwich)) {
-            roundedIndex = Math.floor(numericIndex + 0.001) % this.steps; // hack for zero-indexed greenwich data sets
-        }
-
-        const indexLabel = this.indices[roundedIndex];
-        if (this.type == CubeDimensionType.Time) {
-            return this.getTimeIndexString(roundedIndex);
-        } else if (this.type == CubeDimensionType.Latitude) {
-            if (typeof (indexLabel) == "number") {
-                return this.cubeDimensions.getLatitudeStringFromIndexValue(indexLabel);
-            }
-        } else if (this.type == CubeDimensionType.Longitude) {
-            if (typeof (indexLabel) == "number") {
-                return this.cubeDimensions.getLongitudeStringFromIndexValue(indexLabel);
-            }
-        } else if (typeof (indexLabel) == "number") {
-            if (this.units) {
-                return `${indexLabel}${this.getUnits()}`;
-            }
-            return indexLabel.toLocaleString();
-        }
-        return `${indexLabel}`;
-    }
-
-    private getUnits() {
-        if (this.units == "°") {
-            return this.units; // no space
-        }
-        return this.units ? ` ${this.units}` : "";
-    }
-
-    hasNumericIndices() {
-        const first = this.indices[0];
-        return typeof (first) === "number";
-    }
-
-    hasTrivialNumericIndices() {
-        const first = this.indices[0];
-        const last = this.indices[this.indices.length - 1];
-        return typeof (first) === "number" && typeof (last) === "number" && first == 0 && last == this.indices.length - 1;
-    }
-
-    getDifferenceString(indexDifference: number): { differenceString: string, isExact: boolean } {
-        if (this.type == CubeDimensionType.Time) {
-            return { differenceString: this.getApproximateTimeDifferenceString(indexDifference), isExact: false };
-        }
-        if (this.hasTrivialNumericIndices()) {
-            return { differenceString: "", isExact: true };
-        }
-        const first = this.indices[0];
-        const last = this.indices[this.indices.length - 1];
-        if (typeof (first) !== "number" || typeof (last) !== "number") {
-            return { differenceString: "", isExact: true };
-        }
-        const differencePerStep = Math.abs(last - first) / Math.max(1, this.steps - 1);
-        const difference = Math.abs(indexDifference) * differencePerStep;
-        const precision = Math.max(0, Math.min(2, -Math.floor(Math.log10(differencePerStep))));
-        const d = difference.toFixed(precision);
-        const exact = parseFloat(d) == difference;
-        if (this.units) {
-            return { differenceString: `${d}${this.getUnits()}`, isExact: exact };
-        }
-        return { differenceString: `${d} unit${d == "1" ? "" : "s"}`, isExact: exact}
-    }
-
-    private getApproximateTimeDifferenceString(indexDifference: number): string {
-        if (this.type != CubeDimensionType.Time || !(this.indices[0] instanceof Date)) {
-            return `${Math.round(indexDifference).toFixed(0)}`;
-        }
-        const absoluteSteps = Math.abs(indexDifference);
-        const timeData = this.getTimeMetaData();
-        const totalDaysDifference = absoluteSteps * timeData.daysPerStep;
-        const totalHoursDifference = absoluteSteps * timeData.hoursPerStep;
-        const totalMinutesDifference = absoluteSteps * timeData.minutesPerStep;
-        const totalSecondsDifference = absoluteSteps * timeData.secondsPerStep;
-        if (totalDaysDifference > 340) { // from 11.5 months up, show years
-            const y = totalDaysDifference / 365;
-            return `${y.toFixed(1)} year${y.toFixed(1) == "1.0" ? "" : "s"}`;
-        } else if (totalDaysDifference > 60) { // from 8.5 weeks up, show months
-            const m = Math.round(totalDaysDifference / 30);
-            return `${m.toFixed(0)} month${m > 1 ? "s" : ""}`;
-        } else if (totalDaysDifference > 14.5) { // from 14.5 days up, show weeks
-            const w = Math.round(totalDaysDifference / 7);
-            return `${w.toFixed(0)} week${w > 1 ? "s" : ""}`;
-        } else if (totalDaysDifference > 1) { // from 1 day up, show days
-            const d = Math.round(totalDaysDifference);
-            return `${d.toFixed(0)} day${d > 1 ? "s" : ""}`;
-        } else if (totalHoursDifference > 1) { // from 1 hour up, show hours
-            const h = Math.round(totalHoursDifference);
-            return `${h.toFixed(0)} hour${h > 1 ? "s" : ""}`;
-        } else if (totalMinutesDifference > 1) { // from 1 minute up, show minutes
-            const m = Math.round(totalMinutesDifference);
-            return `${m.toFixed(0)} minute${m > 1 ? "s" : ""}`;
-        } else if (totalSecondsDifference > 1) { // from 1 second up, show seconds
-            const s = Math.round(totalSecondsDifference);
-            return `${s.toFixed(0)} second${s > 1 ? "s" : ""}`;
-        } else { // otherwise show milliseconds
-            const ms = Math.round(absoluteSteps * timeData.millisecondsPerStep);
-            return `${ms.toFixed(0)} millisecond${ms > 1 ? "s" : ""}`;
-        }
-    }
-
-    getName() {
-        if (this.type == CubeDimensionType.Time) {
-            return "Time";
-        } else if (this.type == CubeDimensionType.Latitude) {
-            return "Latitude";
-        } else if (this.type == CubeDimensionType.Longitude) {
-            return "Longitude";
-        }
-        return capitalizeString(this.name);
-    }
-
-    getValueRange() {
-        if (typeof (this.indices[0]) === "number") {
-            return Math.abs((this.indices[0]) - (this.indices[this.indices.length - 1] as number));
-        }
-        return -1;
-    }
-
-    getMaxValue() {
-        if (typeof (this.indices[0]) === "number") {
-            return Math.max(...this.indices as Array<number>);
-        }
-        return -1;
-    }
-}
-
-class CubeDimensions {
-    // Maximum ranges of the whole cube
-    x: CubeDimension;
-    y: CubeDimension;
-    z: CubeDimension;
-
-    // Valid coverage ranges of the current parameter
-    zParameterRange: ParameterRange = new ParameterRange(-1, -1, true);
-    yParameterRange: ParameterRange = new ParameterRange(-1, -1, true);
-    xParameterRange: ParameterRange = new ParameterRange(-1, -1, true);
-
-    private geospatialContext: GeospatialContext = new GeospatialContext();
-
-    context: CubeClientContext;
-
-    constructor(context: CubeClientContext, dimensionNames: string[], dimensionSizes: any, indices: { "x": Array<any>, "y": Array<any>, "z": Array<any> }, coords: any) {
-        this.context = context;
-        const coordsGiven = coords && Object.keys(coords).length > 0 && coords[dimensionNames[0]] && coords[dimensionNames[1]] && coords[dimensionNames[2]];
-        this.x = new CubeDimension(this, Dimension.X, dimensionNames[2], dimensionSizes[dimensionNames[2]], indices["x"], coordsGiven ? coords[dimensionNames[2]]["attrs"] : undefined);
-        this.y = new CubeDimension(this, Dimension.Y, dimensionNames[1], dimensionSizes[dimensionNames[1]], indices["y"], coordsGiven ? coords[dimensionNames[1]]["attrs"] : undefined);
-        this.z = new CubeDimension(this, Dimension.Z, dimensionNames[0], dimensionSizes[dimensionNames[0]], indices["z"], coordsGiven ? coords[dimensionNames[0]]["attrs"] : undefined);
-    }
-
-    setGeospatialContext(geospatialContext: GeospatialContext) {
-        this.geospatialContext = geospatialContext;
-    }
-
-    isGeospatialContextValid() {
-        return this.geospatialContext.isValid();
-    }
-
-    totalWidthForFace(face: CubeFace) {
-        if (face <= 3) {
-            // front/back/top/bottom
-            return this.x.steps;
-        } else {
-            // left/right
-            return this.y.steps;
-        }
-    }
-
-    totalHeightForFace(face: CubeFace) {
-        if (face <= 1) {
-            // front/back
-            return this.y.steps;
-        } else {
-            // top/bottom/left/right
-            return this.z.steps;
-        }
-    }
-
-    xParameterRangeForFace(face: CubeFace) {
-        if (face <= 3) {
-            // front/back/top/bottom
-            return this.xParameterRange;
-        } else {
-            // left/right
-            return this.yParameterRange;
-        }
-    }
-
-    yParameterRangeForFace(face: CubeFace) {
-        if (face <= 1) {
-            // front/back
-            return this.yParameterRange;
-        } else {
-            // top/bottom/left/right
-            return this.zParameterRange;
-        }
-    }
-
-    getOverflowEdgeTileInfo(tile: Tile) {
-        const xTiles = this.xTilesForFace(tile.face, tile.lod);
-        const yTiles = this.yTilesForFace(tile.face, tile.lod);
-        const xTilesUnrounded = this.xTilesForFaceUnrounded(tile.face, tile.lod);
-        const yTilesUnrounded = this.yTilesForFaceUnrounded(tile.face, tile.lod);
-
-        const overflowingX = tile.x == xTiles - 1 && xTiles != xTilesUnrounded;
-        const overflowingY = tile.y == yTiles - 1 && yTiles != yTilesUnrounded;
-
-        if (overflowingX || overflowingY) {
-            return { overflowing: true, 
-                overflowingX,
-                overflowingY,
-                xCutoff: overflowingX ? Math.floor((xTilesUnrounded % 1) * TILE_SIZE) : TILE_SIZE, 
-                yCutoff: overflowingY ? Math.floor((yTilesUnrounded % 1) * TILE_SIZE) : TILE_SIZE
-            };
-        }
-        return { overflowing: false, overflowingX: false, overflowingY: false, xCutoff: 0, yCutoff: 0 };
-    }
-
-    private xTilesForFaceUnrounded(face: CubeFace, lod: number) {
-        return (this.totalWidthForFace(face) * Math.pow(0.5, lod)) / TILE_SIZE;
-    }
-
-    xTilesForFace(face: CubeFace, lod: number) {
-        return Math.ceil(this.xTilesForFaceUnrounded(face, lod));
-    }
-
-    private yTilesForFaceUnrounded(face: CubeFace, lod: number) {
-        return (this.totalHeightForFace(face) * Math.pow(0.5, lod)) / TILE_SIZE
-    }
-    
-    yTilesForFace(face: CubeFace, lod: number) {
-        return Math.ceil(this.yTilesForFaceUnrounded(face, lod));
-    }
-
-    totalTilesForFace(face: CubeFace, lod: number) {
-        return this.xTilesForFace(face, lod) * this.yTilesForFace(face, lod);
-    }
-
-
-    getLatitudeStringFromIndexValue(latitudeValue: number) {
-        return `${this.decimalCoordinateToString(latitudeValue)}${latitudeValue >= 0 ? "N" : "S"}`; // correct, positive latitude is north
-    }
-
-    getGeospatialTotalRangeX() {
-        return this.geospatialContext.xRange;
-    }
-
-    getGeospatialTotalRangeY() {
-        return this.geospatialContext.yRange;
-    }
-
-    getGeospatialSubRangeX(first: number, last: number) {
-        const xRange = this.getGeospatialTotalRangeX().range();
-        return new GeospatialRange(this.getGeospatialValueXFromIndex(first), this.getGeospatialValueXFromIndex(last), this.context.rendering.dimensionOverflow[Dimension.X], xRange); 
-    }
-
-    getGeospatialSubRangeY(first: number, last: number) {
-        return new GeospatialRange(this.getGeospatialValueYFromIndex(first), this.getGeospatialValueYFromIndex(last));
-    }
-
-    getGeospatialValueXFromIndex(step: number): number {
-        if (!this.geospatialContext.isValid()){
-            return NaN;
-        }
-        let xValue = this.geospatialContext.xRange.getValueWithin(step / (this.x.steps - 1));
-        return xValue;
-    }
-    
-    getGeospatialValueYFromIndex(step: number) {
-        if (!this.geospatialContext.isValid()) {
-            return NaN;
-        }
-        const yValue = this.geospatialContext.yRange.getValueWithin(step / (this.y.steps - 1));
-        return yValue;
-    }
-
-    getLongitudeStringFromIndexValue(longitudeValue: number): string {
-        if (this.context.interaction.isCurrentCubeZeroIndexGreenwich() && longitudeValue >= 180) {
-            longitudeValue -= 360;
-        }
-        return `${this.decimalCoordinateToString(longitudeValue)}${longitudeValue >= 0 ? "E" : "W"}`;
-    }
-
-    private decimalCoordinateToString(coordinate: number) {
-        const absolute = Math.abs(coordinate);
-        const degrees = Math.floor(absolute);
-        const minutes = (absolute - degrees) * 60;
-        const wholeMinutes = Math.floor(minutes);
-        const seconds = Math.floor((minutes - wholeMinutes) * 60);
-        return `${degrees}°${wholeMinutes}'${seconds}"`;
-    }
-
-    setInitialParameterRanges(parameterCoverageTime: ParameterRange) {
-        const int = this.context.interaction;
-        if (this.z.type == CubeDimensionType.Time && parameterCoverageTime.length() > 0) {
-            this.zParameterRange.set(int.roundUpToSparsity(parameterCoverageTime.min), int.roundDownToSparsity(parameterCoverageTime.max - 1) + 1);
-        } else {
-            this.zParameterRange.set(0, int.roundDownToSparsity(this.z.steps - 1) + 1);
-        }
-
-        this.xParameterRange.set(0, int.roundDownToSparsity(this.x.steps - 1) + 1);
-        this.yParameterRange.set(0, int.roundDownToSparsity(this.y.steps - 1) + 1);
-    }
-
-    getParameterRangeByDimension(dimension: Dimension) {
-        if (dimension == Dimension.X) {
-            return this.xParameterRange;
-        } else if (dimension == Dimension.Y) {
-            return this.yParameterRange;
-        } else {
-            return this.zParameterRange;
-        }
-    }
-
-    getCubeDimensionByDimension(dimension: Dimension) {
-        if (dimension == Dimension.X) {
-            return this.x;
-        } else if (dimension == Dimension.Y) {
-            return this.y;
-        } else {
-            return this.z;
-        }
-    }
-}
-
-class ParameterColormapMetadata {
-    key!: string;
-    colormapMinimumValue?: number;
-    colormapMaximumValue?: number;
-    colormap?: string;
-    colormapFlipped?: boolean;
-}
-
-class ParameterAttributionMetadata {
-    project_name!: string;
-    long_name!: string;
-    dataset_link!: string;
-    key!: string;
-    domain!: string;
-    short_name!: string;
-    description!: string;
-    long_name_pdf?: string;
-    coverage?: string;
-    references?: string;
-    reference_link?: string;
-    reference_link2?: string;
-}
-
-class Parameter {
-    constructor(name: string, sourceData: any, attributionData: ParameterAttributionMetadata | undefined, colormapData: ParameterColormapMetadata | undefined) {
-        this.name = name;
-
-        this.attributionMetadata = attributionData;
-        this.coverageStartDate = new Date(sourceData.attrs.time_coverage_start);
-        this.coverageEndDate = new Date(sourceData.attrs.time_coverage_end);
-        this.longName = sourceData.attrs.long_name || attributionData?.long_name;
-        this.comment = sourceData.attrs.comment;
-        this.project = attributionData?.project_name || sourceData.attrs.project_name || "";
-        this.units = sourceData.attrs.units || "";
-        this.unitConversion = (a: number) => a;
-        this.globalMinimumValue = sourceData.minimum_value;
-        this.globalMaximumValue = sourceData.maximum_value;
-        this.fixedColormapMinimumValue = (colormapData?.colormapMinimumValue !== undefined) ? colormapData.colormapMinimumValue : undefined;
-        this.fixedColormapMaximumValue = (colormapData?.colormapMaximumValue !== undefined) ? colormapData.colormapMaximumValue : undefined;
-        this.fixedColormap = colormapData?.colormap || undefined;
-        this.fixedColormapFlipped = colormapData?.colormapFlipped || false;
-        this.sourceData = sourceData;
-        this.parameterCoverageTime = new ParameterRange(sourceData["first_valid_time_slice"], sourceData["last_valid_time_slice"] + 1);
-        this.patchMetadata();
-    }
-
-    getConvertedDataValue(value: number) {
-        return this.unitConversion(value);
-    }
-
-    private patchMetadata() {
-        if (this.name == "precipitation_era5") {
-            this.units = "mm day-1"
-            this.unitConversion = (a: number) => a * 100;
-        } else if (["k", "kelvin"].includes(this.units.toLowerCase()) && this.globalMaximumValue > 273.15) {
-            this.units = "°C";
-            this.unitConversion = (a: number) => a - 273.15;
-        } else if (this.units == "mol m-2") {
-            this.units = "mmol m-2";
-            this.unitConversion = (a: number) => a * 1000;
-        } else if (this.units == "J/m^2") {
-            this.units = "MJ/m^2";
-            this.unitConversion = (a: number) => a / 1000000;
-        } else if (this.units == "g/m2") {
-            this.units = "kg/m^2";
-            this.unitConversion = (a: number) => a / 1000;
-        } else if (this.units == "kg m**-2") {
-            const target = -Math.round(Math.log10(this.globalMaximumValue) / 3);
-            if (target >= 0) {
-                this.units = `${["kg", "g", "mg", "μg", "ng"][target]} m**-2`;
-                this.unitConversion = (a: number) => a * Math.pow(10, 3 * target);
-            }
-        }
-    }
-
-    getUnit() {
-        if (["1", "-", "~"].includes(this.units)) {
-            return "";
-        } else {
-            return ` ${this.units}`
-        }
-    }
-
-    getUnitHTML() {
-        return this.getUnit().replace(/(\w)(-?\d)/g, "$1<sup>$2</sup>").replace(/(\w)\^(-?\d)/g, "$1<sup>$2</sup>").replace(/(\w)\*\*(-?\d)/g, "$1<sup>$2</sup>")
-    }
-
-    isAnomalyParameter() {
-        return this.name.endsWith(ANOMALY_PARAMETER_ID_SUFFIX);
-    }
-
-    sourceData: any;
-    name: string;
-    parameterCoverageTime: ParameterRange;
-    coverageStartDate: Date;
-    coverageEndDate: Date;
-    longName: string;
-    comment: string;
-    project: string;
-    globalMaximumValue: number;
-    globalMinimumValue: number;
-    attributionMetadata: ParameterAttributionMetadata | undefined;
-    fixedColormapMinimumValue: number | undefined;
-    fixedColormapMaximumValue: number | undefined;
-    fixedColormap: string | undefined;
-    fixedColormapFlipped: boolean;
-    private units: string;
-    private unitConversion: (a: number) => number;
-}
-
-class GeospatialRange {
-    constructor(first: number, last: number, overflowAllowed: boolean = false, overflowRange: number = 0) {
-        this.first = first;
-        this.last = last;
-        if (this.first > this.last && overflowAllowed) {
-            this.last += overflowRange;
-        }
-        this.min = Math.min(this.first, this.last);
-        this.max = Math.max(this.first, this.last);
-    }
-
-    getFirst() {
-        return this.first;
-    }
-
-    getLast() {
-        return this.last;
-    }
-
-    private first: number;
-    private last: number;
-
-    ascending: boolean = true; // ascending or descending
-
-    min: number;
-    max: number;
-
-    range() {
-        return Math.abs(this.last - this.first);
-    }
-
-    middle() {
-        return this.first + (this.last - this.first) / 2;
-    }
-
-    setFromMinMaxAscending(min: number, max: number, ascending: boolean) {
-        if (ascending) {
-            this.first = min;
-            this.last = max;
-        } else {
-            this.first = max;
-            this.last = min;
-        }
-        this.ascending = ascending;
-        this.min = Math.min(this.first, this.last);
-        this.max = Math.max(this.first, this.last);
-    }
-
-    set(first: number, last: number) {
-        this.first = first;
-        this.last = last;
-        this.ascending = first < last;
-        this.min = Math.min(this.first, this.last);
-        this.max = Math.max(this.first, this.last);
-    }
-
-    isValid() {
-        return !isNaN(this.first) && !isNaN(this.last) && this.first != this.last;
-    }
-
-    relativeWithin(x: number) { // returns 0-1
-        return (x - this.min) / this.range(); // or first?
-    }
-
-    getValueWithin(p: number) {
-        if (this.ascending) { // ascending
-            return this.getFirst() + p * this.range(); // or first?
-        } else {
-            return this.getFirst() - p * this.range(); // or last?
-        }
-    }
-
-    toString() {
-        return `${this.first}-${this.last}`;
-    }
-}
-
-class ParameterRange {
-    min: number;
-    max: number; // Upper bound is EXCLUSIVE
-
-    private savedLength: number = 0; // for floating point precision issues
-
-    private validateSize: boolean = false;
-    static sparsity: number = 1;
-
-    constructor(min: number = 0, max: number = 0, validateSize: boolean = false) {
-        this.min = min;
-        this.max = max;
-        this.validateSize = validateSize;
-    }
-
-    public length() {
-        if (this.savedLength > 0 && Math.abs(this.savedLength - (this.max - this.min)) < 1e-6) { // for floating point precision issues
-            return this.savedLength;
-        }
-        return this.max - this.min;
-    }
-
-    public toString(maxOffset: number = 0, roundedToSparsity: boolean = false) {
-        const min = roundedToSparsity ? roundUpToSparsity(this.min, ParameterRange.sparsity) : this.min;
-        const max = roundedToSparsity ? (roundDownToSparsity(this.max, ParameterRange.sparsity) + maxOffset) : (this.max + maxOffset);
-        return `${min}-${max}`;
-    }
-
-    subRangeOf(outerRange: ParameterRange, overflowAllowed: boolean = false) {
-        if (overflowAllowed) {
-            return this.min >= outerRange.min && this.max <= outerRange.max * 2;
-        }
-        return this.min >= outerRange.min && this.max <= outerRange.max;
-    }
-
-    copy(other: ParameterRange) {
-        this.min = other.min;
-        this.max = other.max;
-        this.validateSize = other.validateSize;
-        this.validate();
-        return this;
-    }
-
-    set(min: number, max: number, finalChange: boolean = true, length: number = 0) {
-        this.min = min;
-        this.max = max;
-        this.savedLength = length;
-        if (finalChange) {
-            this.validate();
-        }
-        return this;
-    }
-
-    static copyFrom(other: ParameterRange): ParameterRange {
-        return new ParameterRange().copy(other);
-    }
-
-    clone(): ParameterRange {
-        return new ParameterRange().copy(this);
-    }
-
-    equals(other: ParameterRange) {
-        return this.min == other.min && this.max == other.max;
-    }
-
-    private validate() {
-        if (!this.validateSize) {
-            return;
-        }
-        const minValid = this.min % ParameterRange.sparsity == 0;
-        const maxValid = (this.max - 1) % ParameterRange.sparsity == 0;
-        if (!minValid || !maxValid) {
-            throw new Error(`Invalid range ${this} for sparsity ${ParameterRange.sparsity}`);
-        }
-    }
-}
-
-class CubeSelection {
-    // Vector View
-    private displaySizes: Vector2[]; // displaySizes are a multiple of sparsity + 1
-    private displayOffsets: Vector2[]; // displayOffsets are a multiple of sparsity
-
-    // Range View
-    private xSelectionRange: ParameterRange;
-    private ySelectionRange: ParameterRange;
-    private zSelectionRange: ParameterRange;
-    private context: CubeClientContext;
-
-    constructor(context: CubeClientContext) {
-        this.context = context;
-        this.displaySizes = [];
-        this.displayOffsets = [];
-        const dims = this.context.interaction.cubeDimensions;
-        const is = this.context.interaction.initialSelectionState;
-        this.xSelectionRange = dims.xParameterRange.clone();
-        this.ySelectionRange = dims.yParameterRange.clone();
-        if (!context.widgetMode) {
-            if (context.interaction.XYdataAspectRatio > 1.0) {
-                this.xSelectionRange = new ParameterRange(0, context.interaction.roundDownToSparsity(dims.xParameterRange.max / context.interaction.XYdataAspectRatio) + 1, true);
-            } else {
-                this.ySelectionRange = new ParameterRange(0, context.interaction.roundDownToSparsity(dims.yParameterRange.max * context.interaction.XYdataAspectRatio) + 1, true);
-            }
-        } else {
-            this.xSelectionRange = dims.xParameterRange.clone();
-        }
-        if (context.interaction.cubeTags.includes(CubeTag.ESDC)) {
-            const l = this.xSelectionRange.length() - 1; // -1 to get identical views as before range refactor
-            const offset = this.context.interaction.roundUpToSparsity(l * 0.83);
-            this.xSelectionRange.set(offset, this.context.interaction.roundDownToSparsity(offset + l - 1) + 1);
-        }
-        if (context.interaction.cubeTags.includes(CubeTag.CamsEac4Reanalysis) || context.interaction.cubeTags.includes(CubeTag.Era5SpecificHumidity)) {
-            const l = this.xSelectionRange.length() - 3; // -1 to get identical views as before range refactor
-            const offset = this.context.interaction.roundUpToSparsity(l * 1.834);
-            this.xSelectionRange.set(offset, this.context.interaction.roundDownToSparsity(offset + l - 1) + 1);
-        }
-        this.zSelectionRange = dims.zParameterRange.clone();
-
-        if (this.context.interaction.initialLoad) {
-            this.parseInitialRange(is.xRange, dims.xParameterRange, this.xSelectionRange, Dimension.X);
-            this.parseInitialRange(is.yRange, dims.yParameterRange, this.ySelectionRange, Dimension.Y);
-            this.parseInitialRange(is.zRange, dims.zParameterRange, this.zSelectionRange, Dimension.Z);
-        }
-
-        for (let face = 0; face < 3; face++) {
-            this.displaySizes.push(new Vector2());
-            this.displayOffsets.push(new Vector2());
-            this.updateVectors(face * 2);
-        }
-    }
-
-    private parseInitialRange(parsedRange: number[] | undefined, parameterRange: ParameterRange, selectionRange: ParameterRange, dimension: Dimension) {
-        if (!parsedRange) {
-            return;
-        }
-        const s = new ParameterRange(this.context.interaction.roundUpToSparsity(parsedRange[0]), this.context.interaction.roundDownToSparsity(parsedRange[1]) + 1);
-        if (s.length() > 0 && s.subRangeOf(parameterRange, this.context.rendering.dimensionOverflow[dimension])) {
-            selectionRange.copy(s);
-            this.context.log("Parsed initial selection range", s);
-        }
-    }
-
-    parseSelectionBoundariesFromWidget(xMin: number, xMax: number, yMin: number, yMax: number, zMin: number, zMax: number) {
-        const changed = [
-            this.parseSelectionBoundary(xMin, xMax, Dimension.X),
-            this.parseSelectionBoundary(yMin, yMax, Dimension.Y),
-            this.parseSelectionBoundary(zMin, zMax, Dimension.Z)
-        ].some((x) => x === true);
-        if (changed) {
-            this.updateAllVectors();
-            this.context.rendering.updateVisibilityAndLodsDebounced();
-            this.updateSelectionRelevantUi();
-        }
-    }
-
-    parseSelectionBoundary(parsedLowerBoundary: number | undefined, parsedUpperBoundary: number | undefined, dimension: Dimension) {
-        if (typeof (parsedLowerBoundary) != "number" || isNaN(parsedLowerBoundary) || parsedLowerBoundary < 0 || 
-            typeof (parsedUpperBoundary) != "number" || isNaN(parsedUpperBoundary) || parsedUpperBoundary < 0) {
-            return false;
-        }
-        const selectionRange = this.getSelectionRangeByDimension(dimension);
-        if (parsedLowerBoundary === undefined) {
-            parsedLowerBoundary = selectionRange.min;
-        }
-        if (parsedUpperBoundary === undefined) {
-            parsedUpperBoundary = selectionRange.max;
-        }
-        const attemptedRange = new ParameterRange(parsedLowerBoundary, parsedUpperBoundary);
-        if (attemptedRange.equals(selectionRange)) {
-            return false;
-        }
-        const parameterRange = this.context.interaction.cubeDimensions.getParameterRangeByDimension(dimension);
-        if (attemptedRange.length() >= 1 && attemptedRange.subRangeOf(parameterRange, this.context.rendering.dimensionOverflow[dimension])) {
-            selectionRange.copy(attemptedRange);
-            return true;
-        } else {
-            throw new Error(`Invalid selection boundary ${attemptedRange} for dimension ${Dimension[dimension]} (Valid parameter range is ${parameterRange})`);
-        }
-    }
-
-    private roundVectorToSparsity(vector: Vector2, minX: number, maxX: number, minY: number, maxY: number) {
-        // if ((minX + maxX + minY + maxY) % 10 != 0) {
-        //     console.warn(`Bad values in roundtoSparsity,vector ${vector},minX ${minX},maxX ${maxX},minY ${minY},maxY ${maxY}`)
-        // }
-        const int = this.context.interaction;
-        const newVector = vector.clone();
-        newVector.x = Math.max(int.roundUpToSparsity(minX), int.roundToSparsity(vector.x));
-        if (newVector.x >= maxX) {
-            newVector.x = int.roundDownToSparsity(maxX);
-        }
-        newVector.y = Math.max(int.roundUpToSparsity(minY), int.roundToSparsity(vector.y));
-        if (newVector.y >= maxY) {
-            newVector.y = int.roundDownToSparsity(maxY);
-        }
-        return newVector;
-    }
-
-    private roundSizeToSparsity(size: Vector2, face: CubeFace) {
-        const maxX = this.context.interaction.cubeDimensions.totalWidthForFace(face); // overflow not currently considered here, since this is called from ranges/sliders only
-        const maxY = this.context.interaction.cubeDimensions.totalHeightForFace(face);
-        const v = this.roundVectorToSparsity(size.clone().subScalar(1), 0, maxX, 0, maxY).addScalar(1);
-        return v;
-    }
-
-    private roundOffsetToSparsity(offset: Vector2, face: CubeFace) {
-        const min = this.context.interaction.getMinimumDisplayOffset(face)
-        const max = this.context.interaction.getMaximumDisplayOffset(face, this.displaySizes[Math.floor(face / 2)])
-        if (this.context.interaction.cubeTags.includes(CubeTag.OverflowX) && (face == CubeFace.Front || face == CubeFace.Back || face == CubeFace.Top || face == CubeFace.Bottom)) {
-            return this.roundVectorToSparsity(offset, -Infinity, Infinity, min.y, max.y);
-        }
-        return this.roundVectorToSparsity(offset, min.x, max.x, min.y, max.y);
-    }
-
-    setUniformLocations(face: number, size: IUniform<Vector2>, offset: IUniform<Vector2>) {
-        size.value = this.displaySizes[Math.floor(face / 2)];
-        offset.value = this.displayOffsets[Math.floor(face / 2)];
-    }
-
-    getSizeVector(face: CubeFace) {
-        return this.displaySizes[Math.floor(face / 2)];
-    }
-
-    getOffsetVector(face: CubeFace) {
-        return this.displayOffsets[Math.floor(face / 2)];
-    }
-
-    setVectorsNoRounding(face: CubeFace, size: Vector2, offset: Vector2) {
-        this.displaySizes[Math.floor(face / 2)].copy(size);
-        this.displayOffsets[Math.floor(face / 2)].copy(offset);
-        this.updateAfterVectorChange(face, false);
-    }
-
-    setVectors(face: CubeFace, size: Vector2, offset: Vector2) {
-        if (size.length() > 0) {
-            this.displaySizes[Math.floor(face / 2)].copy(this.roundSizeToSparsity(size, face));
-        }
-        this.displayOffsets[Math.floor(face / 2)].copy(this.roundOffsetToSparsity(offset, face));
-        this.updateAfterVectorChange(face, true);
-    }
-
-    fixAllVectorsToSparsity() {
-        for (let i = 0; i < 3; i++) {
-            const ts = this.roundSizeToSparsity(this.displaySizes[i], i);
-            const to = this.roundOffsetToSparsity(this.displayOffsets[i], i);
-            if (!ts.equals(this.displaySizes[i])) {
-                console.warn("Fixing size vector", i, "currently", this.displaySizes[i], "now", ts);
-                this.displaySizes[i].copy(ts);
-            }
-            if (!to.equals(this.displayOffsets[i])) {
-                console.warn("Fixing offset vector", i, "currently", this.displayOffsets[i], "now", to);
-                this.displayOffsets[i].copy(to);
-            }
-        }
-    }
-
-    setOffsetVectorNoRounding(face: CubeFace, newOffset: Vector2) {
-        this.displayOffsets[Math.floor(face / 2)].copy(newOffset);
-        this.updateAfterVectorChange(face, false);
-    }
-
-    setOffsetVector(face: CubeFace, newOffset: Vector2) {
-        this.displayOffsets[Math.floor(face / 2)].copy(this.roundOffsetToSparsity(newOffset, face));
-        this.updateAfterVectorChange(face, true);
-    }
-
-    private updateAfterVectorChange(face: CubeFace, finalChange: boolean) {
-        this.updateRanges(face, finalChange);
-        this.updateOtherVectors(face);
-        this.updateSelectionRelevantUi(finalChange);
-        if (this.context.orchestrationMinionMode || this.context.orchestrationMasterMode) {
-            this.context.networking.pushOrchestratorSelectionUpdate(this.displayOffsets, this.displaySizes, finalChange);
-        }
-    }
-
-    applyVectorsFromOrchestrator(displayOffsets: Vector2[], displaySizes: Vector2[], finalChange: boolean) {
-        for (let i = 0; i < 3; i++) {
-            this.displayOffsets[i].copy(displayOffsets[i]);
-            this.displaySizes[i].copy(displaySizes[i]);
-        }
-
-        for (let i = 0; i < 6; i++) {
-            this.updateRanges(i, finalChange);
-        }
-        if (finalChange) {
-            this.context.rendering.updateVisibilityAndLods();
-        }
-        this.context.rendering.updateRegionBorderPositionAndResolution(finalChange);
-        this.context.rendering.requestRender();
-    }
-
-    updateSelectionRelevantUi(finalChange: boolean = true, updateSliders: boolean = true) {
-        this.context.interaction.updateSlidersAndLabelsAfterChange(updateSliders);
-        this.context.rendering.updateRegionBorderPositionAndResolution(finalChange);
-        if (finalChange) {
-            this.context.interaction.requestUrlFragmentUpdate();
-            this.context.interaction.updateAnimationSelectedRangeOnlyLabel();
-        }
-        if (this.context.widgetMode && finalChange) {
-            this.context.interaction.updateWidgetModelRanges();
-        }
-    }
-
-    setRange(dimension: Dimension, min: number, max: number) {
-        const range = this.getSelectionRangeByDimension(dimension);
-        range.set(this.context.interaction.roundToSparsity(min), this.context.interaction.roundToSparsity(max) + 1);
-        this.updateAllVectors();
-        if (this.context.orchestrationMinionMode || this.context.orchestrationMasterMode) {
-            this.context.networking.pushOrchestratorSelectionUpdate(this.displayOffsets, this.displaySizes, true);
-        }
-        this.context.rendering.updateRegionBorderPositionAndResolution();
-        this.context.interaction.updateSlidersAndLabelsAfterChange(false, true);
-    }
-
-    private updateVectors(face: CubeFace) {
-        const xRange = this.xSelectionRangeForFace(face);
-        const yRange = this.ySelectionRangeForFace(face);
-        this.displaySizes[Math.floor(face / 2)].set(xRange.length(), yRange.length());
-        this.displayOffsets[Math.floor(face / 2)].set(xRange.min, yRange.min);
-        this.context.rendering.requestRender();
-    }
-
-    private updateRanges(face: CubeFace, finalChange: boolean) {
-        this.xSelectionRangeForFace(face).set(this.displayOffsets[Math.floor(face / 2)].x, this.displayOffsets[Math.floor(face / 2)].x + this.displaySizes[Math.floor(face / 2)].x, finalChange, this.displaySizes[Math.floor(face / 2)].x);
-        this.ySelectionRangeForFace(face).set(this.displayOffsets[Math.floor(face / 2)].y, this.displayOffsets[Math.floor(face / 2)].y + this.displaySizes[Math.floor(face / 2)].y, finalChange, this.displaySizes[Math.floor(face / 2)].y);
-    }
-
-    private updateAllVectors() {
-        for (let i = 0; i < 6; i++) {
-            this.updateVectors(i)
-        }
-    }
-
-    private updateOtherVectors(face: CubeFace) {
-        for (let i = 0; i < 6; i++) {
-            if (i != face) {
-                this.updateVectors(i)
-            }
-        }
-    }
-
-    private xSelectionRangeForFace(face: CubeFace) {
-        if (face <= 1) {
-            // front/back
-            return this.xSelectionRange;
-        } else if (face <= 3) {
-            // top/bottom
-            return this.xSelectionRange;
-        } else {
-            // left/right
-            return this.ySelectionRange;
-        }
-    }
-
-    private ySelectionRangeForFace(face: CubeFace) {
-        if (face <= 1) {
-            // front/back
-            return this.ySelectionRange;
-        } else if (face <= 3) {
-            // top/bottom
-            return this.zSelectionRange;
-        } else {
-            // left/right
-            return this.zSelectionRange;
-        }
-    }
-
-    getIndexValueForFace(face: CubeFace): number {
-        if (face == CubeFace.Front) {
-            return this.zSelectionRange.max - 1;
-        } else if (face == CubeFace.Back) {
-            return this.zSelectionRange.min;
-        } else if (face == CubeFace.Top) {
-            return this.ySelectionRange.min;
-        } else if (face == CubeFace.Bottom) {
-            return this.ySelectionRange.max - 1;
-        } else if (face == CubeFace.Left) {
-            return positiveModulo(this.xSelectionRange.min, this.context.interaction.cubeDimensions.x.steps);
-        } else {
-            return positiveModulo(this.xSelectionRange.max - 1, this.context.interaction.cubeDimensions.x.steps);
-        }
-    }
-
-    getSelectionRangeByDimension(dimension: Dimension): ParameterRange {
-        if (dimension == Dimension.Z) {
-            return this.zSelectionRange;
-        } else if (dimension == Dimension.Y) {
-            return this.ySelectionRange;
-        } else {
-            return this.xSelectionRange;
-        }
-    }
-}
+// CubeDimension, CubeDimensions moved to core/dimensions.ts
+// Parameter, ParameterColormapMetadata, ParameterAttributionMetadata moved to core/parameters.ts
+// GeospatialRange and ParameterRange moved to core/dimensions.ts
 
 class LogicalDataCube {
     id!: string
     shortName!: string;
 }
 
-enum CubeTag {
-    SpectralIndices,
-    Global,
-    Hainich,
-    Auwald,
-    ESDC,
-    ESDC2,
-    ESDC3,
-    ECMWF,
-    ColormappingFromObservedValues,
-    LongitudeZeroIndexIsGreenwich,
-    CamsEac4Reanalysis,
-    OverflowX,
-    Era5SpecificHumidity
-}
+// CubeTag moved to core/dimensions.ts
 
 class CubeInteraction {
     private context: CubeClientContext;
@@ -1370,12 +331,6 @@ class CubeInteraction {
     private htmlQualitySelect!: HTMLSelectElement;
     private htmlCubeSelect!: HTMLSelectElement;
     private htmlParameterSelect!: HTMLSelectElement;
-    private htmlColormapFlippedCheckbox!: HTMLInputElement;
-    private htmlColormapPercentileCheckbox!: HTMLInputElement;
-    private htmlColormapButtonList!: HTMLDivElement;
-
-    private htmlColormapMinInputDiv!: HTMLInputElement;
-    private htmlColormapMaxInputDiv!: HTMLInputElement;
 
     private statusMessageDiv!: HTMLElement;
     private hoverInfoDiv!: HTMLElement;
@@ -1383,31 +338,21 @@ class CubeInteraction {
     private datasetInfoDialogWrapperDiv!: HTMLElement;
     private datasetInfoCornerListDiv!: HTMLElement;
 
-    private zSliderDiv!: HTMLElement;
-    private ySliderDiv!: HTMLElement;
-    private xSliderDiv!: HTMLElement;
+    private volumeVizRenderStyleSelect!: HTMLSelectElement;
 
-    private zSliderLabelDiv!: HTMLElement;
-    private ySliderLabelDiv!: HTMLElement;
-    private xSliderLabelDiv!: HTMLElement;
-
-    private htmlAnimationIncrementSliderDiv!: HTMLElement;
-    private htmlAnimationWindowSliderDiv!: HTMLElement;
-    private htmlAnimationSpeedSliderDiv!: HTMLElement;
-
-    private htmlAnimationTotalDurationDiv!: HTMLElement;
-
-    private htmlAnimationDropdown!: HTMLElement;
-
-    private htmlColormapScale!: HTMLElement;
-    private htmlColormapScaleGradient!: HTMLElement;
-    private htmlColormapScaleTexts!: HTMLCollectionOf<Element>;
-    private htmlColormapScaleUnitText!: HTMLElement;
+    private htmlVolumeVizMainColumn!: HTMLElement;
+    private htmlVolumeVizLoaderColumn!: HTMLElement;
 
     private htmlFullscreenButton!: HTMLElement;
     private htmlDataSelectButton!: HTMLElement;
+    private htmlDataSelectUi!: HTMLElement;
     private htmlDownloadImageButton!: HTMLElement;
     private htmlDownloadPrintTemplateButton!: HTMLElement;
+
+    // UI managers
+    private colormapUi!: ColormapUIManager;
+    private sliderUi!: SliderUIManager;
+    private animationUi!: AnimationUIManager;
 
     private htmlPrintTemplateResultWrapper!: HTMLElement;
     private htmlPrintTemplateResult!: HTMLElement;
@@ -1420,9 +365,6 @@ class CubeInteraction {
     private htmlPrintTemplateResultSection!: HTMLElement;
 
     private htmlGpsButton!: HTMLElement
-
-    private htmlAnimateStartButton!: HTMLElement;
-    private htmlAnimateStopButton!: HTMLElement;
 
     private htmlAxisLabelXMin!: HTMLElement;
     private htmlAxisLabelXMinParent!: HTMLElement;
@@ -1445,24 +387,33 @@ class CubeInteraction {
     private htmlAxisLabelZDimensionName!: HTMLElement;
     private htmlAxisLabelZDimensionNameParent!: HTMLElement;
 
-    private htmlColormapRangeForm!: HTMLFormElement;
-    private htmlColormapOptions!: HTMLElement;
+    private htmlDisableVolumeVizButton!: HTMLElement;
+    private htmlEnableVolumeVizButton!: HTMLElement;
+    private htmlVolumeVizSection!: HTMLElement;
+    private htmlVolumeVizStatsRow!: HTMLElement;
+    private htmlVolumeVizDescriptionRow!: HTMLElement;
+    private htmlVolumeVizThresholdTarget!: HTMLElement;
+    private htmlVolumeVizThresholdType!: HTMLElement;
+    private htmlVolumeVizThresholdSpatialQuantileContext!: HTMLElement;
+
+    private htmlDownloadDatasetSubsetButton!: HTMLElement;
+    private downloadSubsetInProgress: boolean = false;
 
     private htmlParent: HTMLElement;
 
     updateWidgetModelRanges: () => void = () => { };
     updateWidgetCameraAngle: () => void = () => { };
 
-    private htmlAnimationRecordingCheckbox!: HTMLInputElement;
-    private htmlAnimationRecordingCheckboxLabel!: HTMLElement;
-    private htmlAnimationSelectedRangeOnlyCheckbox!: HTMLInputElement;
-    private htmlAnimationSelectedRangeOnlyCheckboxLabelDiv!: HTMLElement;
-    private htmlAnimationDimensionSelect!: HTMLSelectElement;
-    private htmlAnimationRecordingInProgressPanel!: HTMLElement;
-    private htmlAnimationRecordingOptions!: HTMLElement;
-    private htmlAnimationRecordingFormatSelect!: HTMLSelectElement;
-    private htmlAnimationRecordingRestartButton!: HTMLButtonElement;
-    private htmlAnimationRecordingStopButton!: HTMLButtonElement;
+    private htmlTimeSeriesDiv!: HTMLElement;
+    private htmlTimeSeriesCanvas!: HTMLCanvasElement;
+    private htmlTimeSeriesCloseButton!: HTMLElement;
+
+    private htmlVolumeVizEventTableBody!: HTMLElement;
+    private htmlVolumeVizEventExploreLink!: HTMLElement;
+
+    private resolutionChangePopupDiv!: HTMLElement;
+    private resolutionChangeLabelDiv!: HTMLElement;
+    private resolutionChangeHeadingDiv!: HTMLElement;
 
     private recordAnimation: boolean = false;
     private nextAnimationStepScheduled: boolean = false;
@@ -1471,6 +422,15 @@ class CubeInteraction {
     private requestProgressTimingEnabled: boolean = false;
     private requestProgressStart: number = 0;
     private requestProgressLastUpdate: number = 0;
+    
+    orchestratorAnimationRunning: boolean = false;
+
+    private timeSeriesChart!: Chart<"line", number[], string>;
+    private timeSeries: TimeSeries[] = [];
+
+    private hoveringOverContextLayer = false;
+    private lastContextLayerInteraction = 0;
+    private readonly CONTEXT_LAYER_INTERACTION_COOLDOWN_MS = 50;
 
     private getHtmlElementByClassName(className: string): HTMLElement {
         const elements = this.htmlParent.getElementsByClassName(className);
@@ -1484,50 +444,14 @@ class CubeInteraction {
         this.htmlQualitySelect = this.getHtmlElementByClassName("quality-select")! as HTMLSelectElement;
         this.htmlCubeSelect = this.getHtmlElementByClassName("cube-select")! as HTMLSelectElement;
         this.htmlParameterSelect = this.getHtmlElementByClassName("parameter-select")! as HTMLSelectElement;
-        this.htmlColormapFlippedCheckbox = this.getHtmlElementByClassName("colormap-flipped-checkbox")! as HTMLInputElement;
-        this.htmlColormapPercentileCheckbox = this.getHtmlElementByClassName("colormap-percentile-checkbox")! as HTMLInputElement;
-        this.htmlColormapButtonList = this.getHtmlElementByClassName("colormap-list")! as HTMLDivElement;
 
-        this.zSliderDiv = this.getHtmlElementByClassName('z-selection-slider')!;
-        this.ySliderDiv = this.getHtmlElementByClassName('y-selection-slider')!;
-        this.xSliderDiv = this.getHtmlElementByClassName('x-selection-slider')!;
+        // this.volumeVizRenderStyleSelect = this.getHtmlElementByClassName('volume-viz-render-style-select')! as HTMLSelectElement;
 
-        this.zSliderLabelDiv = this.getHtmlElementByClassName('z-selection-slider-label')!;
-        this.ySliderLabelDiv = this.getHtmlElementByClassName('y-selection-slider-label')!;
-        this.xSliderLabelDiv = this.getHtmlElementByClassName('x-selection-slider-label')!;
-
-        this.htmlAnimationIncrementSliderDiv = this.getHtmlElementByClassName('animation-increment-slider')!;
-        this.htmlAnimationWindowSliderDiv = this.getHtmlElementByClassName('animation-window-slider')!;
-        this.htmlAnimationSpeedSliderDiv = this.getHtmlElementByClassName('animation-speed-slider')!;
-
-        this.htmlAnimationTotalDurationDiv = this.getHtmlElementByClassName('animation-total-duration')!;
-
-        this.htmlAnimationDropdown = this.getHtmlElementByClassName('animation-dropdown-content')!;
-
-        this.htmlAnimationRecordingCheckbox = this.getHtmlElementByClassName('animation-recording-checkbox')! as HTMLInputElement;
-        this.htmlAnimationRecordingCheckboxLabel = this.getHtmlElementByClassName('animation-recording-checkbox-label')!;
-        this.htmlAnimationSelectedRangeOnlyCheckbox = this.getHtmlElementByClassName('animation-selected-range-only-checkbox')! as HTMLInputElement;
-        this.htmlAnimationSelectedRangeOnlyCheckboxLabelDiv = this.getHtmlElementByClassName('animation-selected-range-only-checkbox-label-div')!;
-        this.htmlAnimationRecordingInProgressPanel = this.getHtmlElementByClassName('animation-recording-in-progress-panel')!;
-        this.htmlAnimationRecordingOptions = this.getHtmlElementByClassName('animation-recording-options')!;
-        this.htmlAnimationRecordingFormatSelect = this.getHtmlElementByClassName('animation-recording-format')! as HTMLSelectElement;
-        this.htmlAnimationRecordingRestartButton = this.getHtmlElementByClassName('animation-recording-restart-button')! as HTMLButtonElement;
-        this.htmlAnimationRecordingStopButton = this.getHtmlElementByClassName('animation-recording-stop-button')! as HTMLButtonElement;
-        this.htmlAnimationDimensionSelect = this.getHtmlElementByClassName('animation-dimension-select')! as HTMLSelectElement;
-
-        this.htmlColormapRangeForm = this.getHtmlElementByClassName("colormap-range-form")! as HTMLFormElement;
-        this.htmlColormapOptions = this.getHtmlElementByClassName("colormap-options")! as HTMLElement;
-
-        this.htmlColormapMinInputDiv = this.getHtmlElementByClassName("colormap-min-input") as HTMLInputElement;
-        this.htmlColormapMaxInputDiv = this.getHtmlElementByClassName("colormap-max-input") as HTMLInputElement;
-
-        this.htmlColormapScale = this.getHtmlElementByClassName("color-scale")!;
-        this.htmlColormapScaleGradient = this.getHtmlElementByClassName("color-scale-gradient")!;
-        this.htmlColormapScaleTexts = this.htmlParent.getElementsByClassName("color-scale-label")!;
-        this.htmlColormapScaleUnitText = this.getHtmlElementByClassName("color-scale-unit-label")!;
         this.htmlFullscreenButton = this.getHtmlElementByClassName('fullscreen-button')!;
         this.htmlDataSelectButton = this.getHtmlElementByClassName('data-select-button')!;
+        this.htmlDataSelectUi = this.getHtmlElementByClassName('options-ui')!;
         this.htmlDownloadImageButton = this.getHtmlElementByClassName('download-image-button')!;
+        this.htmlDownloadDatasetSubsetButton = this.getHtmlElementByClassName('download-dataset-subset-button')!;
         this.htmlDownloadPrintTemplateButton = this.getHtmlElementByClassName('download-template-button')!;
         this.htmlPrintTemplateResultWrapper = this.getHtmlElementByClassName("print-template-result-wrapper")!;
 
@@ -1542,8 +466,16 @@ class CubeInteraction {
 
         this.htmlGpsButton = this.getHtmlElementByClassName('gps-button')!;
 
-        this.htmlAnimateStartButton = this.getHtmlElementByClassName('animate-start-button')!;
-        this.htmlAnimateStopButton = this.getHtmlElementByClassName('animate-stop-button')!;
+        this.htmlEnableVolumeVizButton = this.getHtmlElementByClassName('enable-volume-viz-button')!;
+        this.htmlDisableVolumeVizButton = this.getHtmlElementByClassName('disable-volume-viz-button')!;
+        this.htmlVolumeVizSection = this.getHtmlElementByClassName('volume-viz-section')!;
+        this.htmlVolumeVizStatsRow = this.getHtmlElementByClassName('volume-viz-stats-row')!;
+        this.htmlVolumeVizDescriptionRow = this.getHtmlElementByClassName('volume-viz-description-row')!;
+        this.htmlVolumeVizThresholdTarget = this.getHtmlElementByClassName('volume-viz-threshold-target')!;
+        this.htmlVolumeVizThresholdType = this.getHtmlElementByClassName('volume-viz-threshold-type')!;
+        this.htmlVolumeVizThresholdSpatialQuantileContext = this.getHtmlElementByClassName('volume-viz-threshold-spatial-quantile-context')!;
+        this.htmlVolumeVizMainColumn = this.getHtmlElementByClassName('volume-viz-main-column')!;
+        this.htmlVolumeVizLoaderColumn = this.getHtmlElementByClassName('volume-viz-loader-column')!;
 
         this.htmlAxisLabelXMin = this.getHtmlElementByClassName('axis-label-x-min')!;
         this.htmlAxisLabelXMinParent = this.getHtmlElementByClassName('axis-label-parent-x-min')!;
@@ -1571,17 +503,25 @@ class CubeInteraction {
         this.datasetInfoDialogDiv = this.getHtmlElementByClassName("dataset-info")!;
         this.datasetInfoDialogWrapperDiv = this.getHtmlElementByClassName("dataset-info-wrapper")!;
         this.datasetInfoCornerListDiv = this.getHtmlElementByClassName("dataset-info-corner-list")!;
+
+        this.resolutionChangePopupDiv = this.getHtmlElementByClassName("resolution-change-popup")!;
+        this.resolutionChangeLabelDiv = this.getHtmlElementByClassName("resolution-change-label")!;
+        this.resolutionChangeHeadingDiv = this.getHtmlElementByClassName("resolution-change-heading")!;
+
+        this.htmlTimeSeriesDiv = this.getHtmlElementByClassName("time-series-ui")!;
+        this.htmlTimeSeriesCloseButton = this.getHtmlElementByClassName("time-series-close-button")!;
+        this.htmlTimeSeriesCanvas = this.getHtmlElementByClassName("time-series-canvas")! as HTMLCanvasElement;
+
+        this.htmlVolumeVizEventTableBody = this.getHtmlElementByClassName("volume-viz-event-table-body")!;
+        this.htmlVolumeVizEventExploreLink = this.getHtmlElementByClassName("volume-viz-event-explore-link")! as HTMLAnchorElement;
+
+        // Delegate to UI managers
+        this.colormapUi.setupHtmlReferences(this.htmlParent);
+        this.sliderUi.setupHtmlReferences();
+        this.animationUi.setupHtmlReferences(this.htmlParent);
     }
 
     fullyLoaded = false;
-
-    private zSelectionSlider!: API;
-    private ySelectionSlider!: API;
-    private xSelectionSlider!: API;
-
-    private animationIncrementSlider!: API;
-    private animationWindowSlider!: API;
-    private animationSpeedSlider!: API;
 
     private availableCubes: LogicalDataCube[] = [];
     selectedCube!: LogicalDataCube;
@@ -1591,15 +531,13 @@ class CubeInteraction {
     cubeSelection!: CubeSelection;
     private cubeParameters!: Map<string, Parameter>;
     private selectedParameter!: Parameter;
-    selectedCubeMetadata!: { attrs: any, coords: any, data_vars: any, dims: any, max_lod: number, sparsity: number };
-
-    private lastOverflowXSliderIndex = 0; // for overflow / infinite longitude scroll
+    private selectedCubeMetadata!: { attrs: any, coords: any, data_vars: any, dims: any, max_lod_2d: number, max_lod_3d: number, enable_2d_tiles: boolean, enable_3d_tiles: boolean, sparsity: number, allow_data_downloads: boolean };
 
     private interactingFace = -1;
     private panStartUv = new Vector2();
     private panStartDisplayOffset = new Vector2();
 
-    private hoverData: HoverData = new HoverData();
+    private hoverData: PickedDataValue = new PickedDataValue();
 
     private isMouseHoveringOverCube: boolean = false;
     private lastHoverMousePosition: Vector2 | undefined = undefined;
@@ -1608,10 +546,7 @@ class CubeInteraction {
     private floatDisplaySignificance = 2;
     fullscreenActive: boolean = false;
 
-    private colormapScaleCanvasContext!: CanvasRenderingContext2D;
-    private colormapScaleWidth: number;
-    private colormapScaleHeight: number = 25;
-    private orbitControls!: OrbitControls;
+    private orbitControls!: CameraControls;
     private currentZoomFactor: number[] = [1.0, 1.0, 1.0];
     private previousZoomFactor: number[] = [1.0, 1.0, 1.0];
 
@@ -1621,20 +556,27 @@ class CubeInteraction {
     private currentTouchEventOnCube = true;
     private currentMouseEventOnCube = true;
     private currentMouseEventActive = false;
+    private currentTouchEventActive = false;
+
+    private panMoveCalled = 0;
 
     private currentZoomFace: number = -1;
 
     private interactionFinishDisplaySize: Vector2 | undefined;
     private interactionFinishDisplayOffset: Vector2 | undefined;
     private interactionFinishFace: CubeFace | undefined;
+    private interactionWasSimpleClick: boolean = false;
 
     private deferredVisibilityAndLodUpdateMilliseconds = 150;
     private deferredVisibilityAndLodUpdateTimeoutHandler: number = 0;
     XYdataAspectRatio: number = 1; // longitude divided by latitude
 
     geospatialContextProvided: boolean = false;
-    selectedColormapName!: string;
-    selectedColormapCategory!: string;
+
+    get selectedColormapName(): string { return this.colormapUi.selectedColormapName; }
+    set selectedColormapName(v: string) { this.colormapUi.selectedColormapName = v; }
+    get selectedColormapCategory(): string { return this.colormapUi.selectedColormapCategory; }
+    set selectedColormapCategory(v: string) { this.colormapUi.selectedColormapCategory = v; }
 
     private animationParameters!: AnimationParameters;
 
@@ -1659,69 +601,255 @@ class CubeInteraction {
     private localStorageUpdateWarningKey = "lexcube_jupyter_last_update_notification";
     private packageUpdateReminderInterval = 1000 * 60 * 60; // 1 hour
 
+    private readonly availableExtremeTypes = [
+        new ExtremeType(1, "AO",  ExtremeThresholdTarget.Observations,      ExtremeThresholdType.Absolute, null),
+        new ExtremeType(2, "AD",  ExtremeThresholdTarget.DeviationsFromMSC, ExtremeThresholdType.Absolute, null),
+        new ExtremeType(3, "QGO", ExtremeThresholdTarget.Observations,      ExtremeThresholdType.Quantile, ExtremeSpatialQuantileContext.AllTimeSeries),
+        new ExtremeType(4, "QGD", ExtremeThresholdTarget.DeviationsFromMSC, ExtremeThresholdType.Quantile, ExtremeSpatialQuantileContext.AllTimeSeries),
+        new ExtremeType(5, "QRO", ExtremeThresholdTarget.Observations,      ExtremeThresholdType.Quantile, ExtremeSpatialQuantileContext.PcaGroupedTimeSeries),
+        new ExtremeType(6, "QRD", ExtremeThresholdTarget.DeviationsFromMSC, ExtremeThresholdType.Quantile, ExtremeSpatialQuantileContext.PcaGroupedTimeSeries),
+        new ExtremeType(7, "QLO", ExtremeThresholdTarget.Observations,      ExtremeThresholdType.Quantile, ExtremeSpatialQuantileContext.SingleTimeSeries),
+        new ExtremeType(8, "QLD", ExtremeThresholdTarget.DeviationsFromMSC, ExtremeThresholdType.Quantile, ExtremeSpatialQuantileContext.SingleTimeSeries),
+    ];
+
+    private currentExtremeType: ExtremeType = this.availableExtremeTypes[0];
+
+
     constructor(context: CubeClientContext, htmlParent: HTMLElement) {
         this.context = context;
-        this.colormapScaleWidth = context.widgetMode ? 180 : (context.isClientPortrait() ? 180 : 230);
         this.htmlParent = htmlParent;
-        // if (window.innerWidth < window.innerHeight) {
-        //     const c = document.getElementById("bottom-left-ui")!;
-        //     c.id = "top-left-ui";
-        //     c.insertBefore(c.children[1], c.children[0]);
-        // }
+
+        const self = this;
+
+        // Create colormap UI manager
+        const colormapHost: ColormapUIHostState = {
+            get widgetMode() { return context.widgetMode; },
+            get expertMode() { return context.expertMode; },
+            get isClientPortrait() { return context.isClientPortrait(); },
+            get tileData() { return context.tileData; },
+            get selectedParameter() { return self.selectedParameter; },
+            get floatDisplaySignificance() { return self.floatDisplaySignificance; },
+            log: (...args: any[]) => context.log(...args),
+            toFixed: (f: number) => self.toFixed(f),
+            onWidgetColormapChanged: (name: string) => self.updateWidgetColormap(name),
+            onWidgetColormapRangeChanged: (min: number | null, max: number | null) => self.updateWidgetModelColormapRange(min, max),
+        };
+        this.colormapUi = new ColormapUIManager(colormapHost);
+
+        // Create slider UI manager
+        const sliderHost: SliderUIHostState = {
+            get updateUiDuringInteractionsSliders() { return self.updateUiDuringInteractions.sliders; },
+            get cubeDimensions() { return self.cubeDimensions; },
+            get cubeSelection() { return self.cubeSelection; },
+            get sparsity() { return self.selectedCubeMetadata.sparsity; },
+            get geospatialContextProvided() { return self.geospatialContextProvided; },
+            get cubeTags() { return self.cubeTags; },
+            get animationParameters() { return self.animationParameters; },
+            log: (...args: any[]) => context.log(...args),
+            onSelectionRangeChanged: (dim, min, max) => { self.cubeSelection.setRange(dim, min, max); },
+            onSelectionUiUpdate: (downloadTiles, force) => { self.cubeSelection.updateSelectionRelevantUi(downloadTiles, force); },
+            onVisibilityAndLodUpdate: () => { context.rendering.updateVisibilityAndLods(); },
+            onVolumeAbsoluteThresholdChanged: (v, updateUi) => { self.setVolumeRenderingAbsoluteThreshold(v, updateUi); },
+            onVolumeQuantileThresholdChanged: (v, updateUi) => { self.setVolumeRenderingQuantileThreshold(v, updateUi); },
+            onVolumeRangeChanged: (min, max, updateUi) => { self.setVolumeRenderingRange(min, max, updateUi); },
+            onVolumeUseQuantileChanged: (useQuantile) => { self.setVolumeRenderingUseQuantileOverAbsoluteThreshold(useQuantile); },
+            getVolumeRenderingThresholdSign() { return self.getVolumeRenderingThresholdSign(); },
+            setVolumeRenderingThresholdSign(sign, updateUi) { self.setVolumeRenderingThresholdSign(sign, updateUi); },
+            toFixed: (f: number) => self.toFixed(f),
+            getUnitHTML: () => self.selectedParameter ? self.selectedParameter.getUnitHTML() : "",
+        };
+        this.sliderUi = new SliderUIManager(sliderHost, htmlParent);
+
+        // Create animation UI manager
+        const animationHost: AnimationUIHostState = {
+            get animationParameters() { return self.animationParameters; },
+            get cubeDimensions() { return self.cubeDimensions; },
+            get cubeSelection() { return self.cubeSelection; },
+            get animationRecordingSupported() { return self.animationRecordingSupported; },
+            get recordAnimation() { return self.recordAnimation; },
+            set recordAnimation(v) { self.recordAnimation = v; },
+            log: (...args: any[]) => context.log(...args),
+            onStartAnimation: () => self.startAnimation(),
+            onStopAnimation: () => self.stopAnimation(),
+            onStartRecording: (fps) => context.rendering.startRecordingAnimation(fps),
+            onStopRecording: () => context.rendering.stopRecordingAnimation(),
+            onAnimationDimensionChanged: (dim) => self.updateAnimationDimension(dim),
+            onAnimationSelectedRangeOnlyChanged: () => self.setAnimationUseSelectedRangeOnly(),
+            onRecordingFormatChanged: (format) => context.rendering.setAnimationRecordingFormat(format),
+            showAnimationSettingsHover: (hideIfAlreadyShown: boolean = false) => self.showAnimationSettingsHover(hideIfAlreadyShown),
+            get isTouchDevice() { return context.touchDevice; },
+        };
+        this.animationUi = new AnimationUIManager(animationHost);
+
         if (context.expertMode) {
             document.querySelector('style')!.innerHTML = ".expert-mode { display: block; }";
+        }
+        if (context.orchestrationMasterMode) {
+            document.querySelector('style')!.innerHTML += ".lexcube-body .toolbar-ui-button { width: 84px; height: 84px; }";
         }
     }
 
     async startup() {
         this.setupHtmlInterface();
-        this.prepareUiSliders();
-        this.initializeColormapScale();
-        this.initializeColormapUi();
+        this.prepareTimeSeriesChart();
+        this.sliderUi.prepareAll();
+        this.colormapUi.initializeScale();
+        this.colormapUi.initializeUi();
         this.registerEvents();
         this.applyCameraPreset();
         await this.retrieveMetaData();
         this.parseUrlFragment();
         await this.selectInitialCube();
+        this.disableAllLinksInOrchestrationMasterMode();
+        if (this.context.orchestrationMasterMode || this.context.orchestrationMinionMode) {
+            window.setInterval( () => {
+                this.context.networking.resetTileCache(); // reset tile cache every hour in long-running orchestration settings
+            }, 1000 * 60 * 60);
+        }
     }
 
-    private async selectInitialCube() {
+    private disableAllLinksInOrchestrationMasterMode() {
+        if (!this.context.orchestrationMasterMode) {
+            return;
+        }
+
+        window.setTimeout(() => {
+            var anchors = document.getElementsByTagName("a");
+            for (var i = 0; i < anchors.length; i++) {
+                anchors[i].href = "";
+                anchors[i].target = "";
+                anchors[i].onclick = (ev: MouseEvent) => {
+                    ev.preventDefault();
+                    ev.stopPropagation();
+                    return false;
+                };
+            }
+        }, 1);
+    }
+
+    async selectInitialCube() {
         if (this.initialSelectionState.cubeId) {
             if (await this.findToSelectCube(this.initialSelectionState.cubeId)) {
                 return;
             }
         }
-        if (this.availableCubes.find(cube => cube.id == "esdc-3.0.2")) {
-            if (await this.findToSelectCube("esdc-3.0.2")) {
-                return;
+        const hermes = this.availableCubes.find(cube => cube.id.startsWith("hermes-"));
+        const esdc3 = this.availableCubes.find(cube => cube.id.startsWith("esdc-3.0.2"));
+        for (let priorityCubes of [hermes, esdc3]) {
+            if (priorityCubes) {
+                if (await this.findToSelectCube(priorityCubes.id)) {
+                    return;
+                }
             }
         }
         await this.findToSelectCube(this.availableCubes[0].id);
     }
 
+    private interactWithContextLayer(pickedObject: Object3D | null, eventType: ContextLayerInteraction = ContextLayerInteraction.Click) {
+        if (eventType == ContextLayerInteraction.HoverLeave) {
+            this.unhighlightTimeSeries();
+            this.hoveringOverContextLayer = false;
+        }
+        if (!this.checkContextLayerInteractionCooldown()) {
+            return;
+        }
+        if (!pickedObject) {
+            return;
+        }
+        while (!pickedObject.userData || !pickedObject.userData["isContextLayerObject"]) {
+            pickedObject = pickedObject.parent as Object3D;
+            if (!pickedObject) {
+                return;
+            }
+        }
+        if (pickedObject.userData && pickedObject.userData["isTimeSeriesMarker"]) {
+            const id = pickedObject.userData["timeSeriesId"];
+            this.context.log(`Interacted with time series marker id=${id}, eventType=${ContextLayerInteraction[eventType]}`);
+            if (eventType == ContextLayerInteraction.Click) {
+                this.removeTimeSeries(id);
+            } else if (eventType == ContextLayerInteraction.HoverEnter) {
+                this.highlightTimeSeries(id);
+                this.hoveringOverContextLayer = true;
+            }
+        }
+    }
+    
+    private mouseDisabledHtmlElements: HTMLElement[] = [];
+
+    private enableMouseOnAllUiElements() {
+        for (const el of this.mouseDisabledHtmlElements) {
+            el.style.pointerEvents = (el as any)._originalPointerEvents || "";
+        }
+        this.mouseDisabledHtmlElements = [];
+    }
+
+    private disableMouseOnAllUiElements() {
+        this.enableMouseOnAllUiElements();
+
+        const candidates = this.htmlParent.querySelectorAll<HTMLElement>("*");
+        
+        for (const el of candidates) {
+            if ((el.style.pointerEvents || el.classList.contains("ui-normal") || el.classList.contains("toolbar-ui")) && !el.hasAttribute("data-engine")) {
+                this.mouseDisabledHtmlElements.push(el);
+                if (!(el as any)._originalPointerEvents && el.style.pointerEvents != "none") {
+                    (el as any)._originalPointerEvents = el.style.pointerEvents;
+                }
+                el.style.pointerEvents = "none";
+            }
+        }
+    }
+
+    updateToolbarPosition() {
+        const toolbarUi = this.getHtmlElementByClassName("toolbar-ui");
+        if (this.context.isClientPortrait()) {
+            toolbarUi.style.maxWidth = "100%";
+            toolbarUi.style.width = "100%";
+            toolbarUi.style.top = "8.5%";
+            toolbarUi.style.right = "0%";
+            toolbarUi.style.justifyContent = "center";
+        } else {            
+            toolbarUi.style.maxWidth = "";
+            toolbarUi.style.width = "";
+            toolbarUi.style.top = "1.5%";
+            toolbarUi.style.right = "1.5%";
+            toolbarUi.style.justifyContent = "";
+        }
+    }
+
     private registerEvents() {
         const domElement = this.context.rendering.getDomElement();
-        this.orbitControls = new OrbitControls(this.context, this.context.rendering.mainCamera, domElement);
-
+        this.orbitControls = new CameraControls(this.context, this.context.rendering.getCurrentCamera(), domElement);
+        if (this.context.orchestrationMinionMode || this.context.orchestrationMasterMode) {
+            this.orbitControls.enablePan = false;
+        }
         this.orbitControls.addEventListener("change", () => {;
             if (this.updateUiDuringInteractions.orbitControls) {
                 this.context.rendering.updateVisibilityAndLods();
             } else {
-                this.context.rendering.updateVisibilityAndLodsWithoutTriggeringDownloads();
+                this.context.rendering.updateVisibilityAndLods(false);
             }
-            this.updateLabelPositions();
+            if (this.context.lowPerformanceDeviceMode) {
+                debounce(50, this.updateLabelPositions.bind(this))();
+            } else {
+                this.updateLabelPositions();
+            }
         });
-        this.orbitControls.addEventListener("end", this.context.rendering.updateVisibilityAndLods.bind(this.context.rendering));
-        this.orbitControls.addEventListener("end", this.requestUrlFragmentUpdate.bind(this));
+        this.orbitControls.addEventListener("end", () => { this.context.rendering.updateVisibilityAndLods(); });
+        this.orbitControls.addEventListener("end", () => { this.requestUrlFragmentUpdate(); });
         this.orbitControls.addEventListener("end", () => {
             window.setTimeout(() => {
                 this.updateLabelPositions(); // delay for camera matrix to catch up
             }, 25);
             this.updateWidgetCameraAngle();
         });
+        
+        const isOverCube = (position: Vector2) => {
+            return this.context.rendering.isWindowPositionOverCube(position); // faster call instead of raycast, but needs swapping out once we have more complex scene than just one unit cube.
+            // return this.context.rendering.raycastWindowPosition(position.x, position.y).type == RaycastResultType.Cube;
+        }
 
-        const isOverBackground = (position: Vector2) => {
-            return this.context.rendering.raycastWindowPosition(position.x, position.y).length == 0;
+        const getRaycastTarget = (position: Vector2, contextLayerAllowed: boolean) => {
+            return this.context.rendering.raycastWindowPosition(position.x, position.y, contextLayerAllowed);
         }
 
         domElement.addEventListener('wheel', (ev: WheelEvent) => {
@@ -1730,10 +858,10 @@ class CubeInteraction {
             }
             ev.preventDefault();
             ev.stopPropagation();
-            if (isOverBackground(this.getLocalEventPosition(ev))) {
-                this.orbitControls.onMouseWheel(ev);
-            } else {
+            if (isOverCube(this.getLocalEventPosition(ev))) {
                 this.onZoom([ev], -ev.deltaY, true);
+            } else {
+                this.orbitControls.onMouseWheel(ev);
             }
             if (!this.currentMouseEventActive) {
                 // if panning and zooming at same time: do not refresh as selection may not be rounded to sparsity
@@ -1746,34 +874,52 @@ class CubeInteraction {
             if (!this.fullyLoaded) {
                 return;
             }
+            const localEventPosition = this.getLocalEventPosition(ev);
+            const raycastTarget = getRaycastTarget(localEventPosition, true);
+            if (raycastTarget.type == RaycastResultType.ContextLayer) {
+                this.interactWithContextLayer(raycastTarget.ray[0].object, ContextLayerInteraction.Click);
+                return;
+            }
+            this.interactionWasSimpleClick = true;
             this.hideMenusForTouchDevices();
             this.currentMouseEventActive = true;
-            const localEventPosition = this.getLocalEventPosition(ev);
-            this.currentMouseEventOnCube = !isOverBackground(localEventPosition);
+            this.currentMouseEventOnCube = raycastTarget.type == RaycastResultType.Cube;
             (ev as any).actOnWorld = !this.currentMouseEventOnCube;
             if (!this.currentMouseEventOnCube) {
                 this.orbitControls.onMouseDown(ev);
+                this.disableMouseOnAllUiElements();
             } else {
                 this.onPanStart(localEventPosition);
             }
-            this.context.rendering.requestRender();
+            this.context.rendering.requestRender(this.currentMouseEventOnCube);
         }, false);
-        domElement.addEventListener('mousemove', (ev: any) => {
-            if (!this.fullyLoaded) {
-                return;
+        domElement.addEventListener( 'mousemove', (ev: any) => {
+            if (!this.fullyLoaded) { 
+                return; 
             }
             const localEventPosition = this.getLocalEventPosition(ev);
-            const overCube = !isOverBackground(localEventPosition);
+            const raycastTarget = getRaycastTarget(localEventPosition, true);
+            if (this.hoveringOverContextLayer && raycastTarget.type != RaycastResultType.ContextLayer) {
+                this.interactWithContextLayer(null, ContextLayerInteraction.HoverLeave);
+                return;
+            }
+            if (raycastTarget.type == RaycastResultType.ContextLayer && !this.currentMouseEventActive) {
+                if (!this.hoveringOverContextLayer) {
+                    this.interactWithContextLayer(raycastTarget.ray[0].object, ContextLayerInteraction.HoverEnter);
+                }
+                return;
+            }
+            const overCube = raycastTarget.type == RaycastResultType.Cube;
             domElement.style.cursor = overCube ? "all-scroll" : "default";
             if (!this.currentMouseEventActive) {
                 if (overCube) {
                     this.isMouseHoveringOverCube = true;
                     this.updateHoverInfo(localEventPosition);
-                    this.changeHoverInfoUiVisibility(true);
                 } else {
                     this.isMouseHoveringOverCube = false;
                     this.lastHoverMousePosition = undefined;
                     this.changeHoverInfoUiVisibility(false);
+                    this.context.rendering.hidePick3d();
                 }
                 return;
             }
@@ -1783,59 +929,77 @@ class CubeInteraction {
             } else {
                 this.onPanMove(localEventPosition);
             }
-            this.context.rendering.requestRender();
+            this.context.rendering.requestRender(this.currentMouseEventOnCube);
         }, false);
         domElement.addEventListener('mouseup', (ev: any) => {
             if (!this.fullyLoaded) {
+                return;
+            }
+            if (!this.currentMouseEventActive) {
                 return;
             }
             this.currentMouseEventActive = false;
             (ev as any).actOnWorld = !this.currentMouseEventOnCube;
             if (!this.currentMouseEventOnCube) {
                 this.orbitControls.onMouseUp(ev);
+                this.enableMouseOnAllUiElements();
             } else {
                 this.finishInteraction();
             }
-            this.context.rendering.requestRender();
+            this.context.rendering.requestRender(this.currentMouseEventOnCube);
         }, false);
 
         domElement.addEventListener('touchstart', (ev: TouchEvent) => {
             if (!this.fullyLoaded) {
                 return;
             }
-            if (this.context.orchestrationMinionMode && ev.touches.length > 2) {
-                (ev as any).touches = [ev.touches[0]];
+            // if (this.context.orchestrationMinionMode && ev.touches.length > 2) {
+            //     (ev as any).touches = [ev.touches[0]];
+            // }
+            if (ev.touches.length == 1) {
+                const raycastTarget = getRaycastTarget(this.getLocalEventPosition(ev.touches[0]), true);
+                if (raycastTarget.type == RaycastResultType.ContextLayer) {
+                    this.interactWithContextLayer(raycastTarget.ray[0].object, ContextLayerInteraction.Click);
+                    return;
+                }
             }
+            if (ev.touches.length == 1) {
+                this.interactionWasSimpleClick = true;
+            }
+            this.currentTouchEventActive = true;
             this.hideMenusForTouchDevices();
-            this.currentTouchEventOnCube = !Array.from(ev.touches).some((value: Touch, index: number, array: Touch[]) => { return isOverBackground(this.getLocalEventPosition(value)) });
+            this.currentTouchEventOnCube = Array.from(ev.touches).every((value: Touch, index: number, array: Touch[]) => { return isOverCube(this.getLocalEventPosition(value)) });
             (ev as any).actOnWorld = !this.currentTouchEventOnCube;
             this.orbitControls.onTouchStart(ev);
-            this.context.rendering.requestRender();
+            this.context.rendering.requestRender(this.currentTouchEventOnCube);
         }, false);
         domElement.addEventListener('touchend', (ev: TouchEvent) => {
-            if (!this.fullyLoaded) {
+            if (!this.fullyLoaded || !this.currentTouchEventActive) {
                 return;
             }
-            if (this.context.orchestrationMinionMode && ev.touches.length > 2) {
-                (ev as any).touches = [ev.touches[0]];
-            }
+            // if (this.context.orchestrationMinionMode && ev.touches.length > 2) {
+            //     (ev as any).touches = [ev.touches[0]];
+            // }
             (ev as any).actOnWorld = !this.currentTouchEventOnCube;
             this.finishInteraction();
             if (!this.currentTouchEventOnCube) {
                 this.orbitControls.onTouchEnd(ev);
             }
-            this.context.rendering.requestRender();
+            this.context.rendering.requestRender(this.currentTouchEventOnCube);
         }, false);
         domElement.addEventListener('touchmove', (ev: TouchEvent) => {
-            if (!this.fullyLoaded) {
+            if (!this.fullyLoaded || !this.currentTouchEventActive) {
                 return;
             }
-            if (this.context.orchestrationMinionMode && ev.touches.length > 2) {
-                (ev as any).touches = [ev.touches[0]];
+            if (ev.touches.length != 1) {
+                this.interactionWasSimpleClick = false;
             }
+            // if (this.context.orchestrationMinionMode && ev.touches.length > 2) {
+            //     (ev as any).touches = [ev.touches[0]];
+            // }
             (ev as any).actOnWorld = !this.currentTouchEventOnCube;
             this.orbitControls.onTouchMove(ev);
-            this.context.rendering.requestRender();
+            this.context.rendering.requestRender(this.currentTouchEventOnCube);
             this.isMouseHoveringOverCube = false;
             this.changeHoverInfoUiVisibility(false);
         }, false);
@@ -1910,9 +1074,14 @@ class CubeInteraction {
             // this.cubeSelection.fixAllVectorsToSparsity();
             this.cubeSelection.setVectors(this.interactionFinishFace!, this.interactionFinishDisplaySize || new Vector2(), this.interactionFinishDisplayOffset);
         }
+        if (this.interactionWasSimpleClick && this.interactingFace == CubeFace.Front) {
+            this.createOrDeleteTimeSeries(this.interactingFace, this.panStartUv);
+        }
         this.interactionFinishFace = undefined;
         this.interactionFinishDisplaySize = undefined;
         this.interactionFinishDisplayOffset = undefined;
+        this.interactingFace = -1;
+        this.interactionWasSimpleClick = false;
         this.previousZoomFactor[Math.floor(this.currentZoomFace / 2)] = this.currentZoomFactor[Math.floor(this.currentZoomFace / 2)];
         this.currentZoomFace = -1;
         this.currentZoomNewCenterPoint = undefined;
@@ -1921,21 +1090,26 @@ class CubeInteraction {
     }
 
     onPanStart(initialPosition: Vector2) {
-        const ray = this.context.rendering.raycastWindowPosition(initialPosition.x, initialPosition.y);
-        const m = ray[0].face!.materialIndex;
-        if (m < 0 || m >= 6) {
+        this.panMoveCalled = 0;
+        const raycastResult = this.context.rendering.raycastWindowPosition(initialPosition.x, initialPosition.y);
+        const ray = raycastResult.ray;
+        const targetFace = ray[0].face!.materialIndex;
+        if (targetFace < 0 || targetFace >= 6) {
             return console.error("Bad material face index for interaction")
         }
-        this.interactingFace = m;
+        if (this.context.singleFaceMode && targetFace != this.context.singleFace) {
+            return console.warn("Interaction on face", CubeFace[targetFace], "not allowed in single face mode");
+        }
+        this.interactingFace = targetFace;
         this.context.log("Panning:", CubeFace[this.interactingFace].toUpperCase())
 
         this.panStartUv.set(ray[0].uv!.x, ray[0].uv!.y);
-        this.panStartDisplayOffset.copy(this.cubeSelection.getOffsetVector(this.interactingFace));
+        this.panStartDisplayOffset.copy(this.cubeSelection.getDisplayOffsetVector2d(this.interactingFace));
     }
 
     private normalizeOverflowingXValue(x: number, face: CubeFace) {
         const width = this.cubeDimensions.totalWidthForFace(face);
-        const displaySize = this.cubeSelection.getSizeVector(face);
+        const displaySize = this.cubeSelection.getDisplaySizeVector2d(face);
         const x1 = Math.floor(x / width);
         const x2 = Math.floor((x + displaySize.x) / width);
         if ((x1 > 0 && x2 > 0) || x1 < 0) {
@@ -1953,33 +1127,41 @@ class CubeInteraction {
     }
 
     onPanMove(currentPosition: Vector2) {
-        const ray = this.context.rendering.raycastWindowPosition(currentPosition.x, currentPosition.y);
+        this.panMoveCalled += 1;
+        const raycastResult = this.context.rendering.raycastWindowPosition(currentPosition.x, currentPosition.y);
+        const ray = raycastResult.ray;
         if (!ray || ray.length == 0) {
             // console.warn("Ray intersection is zero length");
             return;
         }
-        const face = ray[0].face!.materialIndex;
-        if (face != this.interactingFace) {
+        const targetFace = ray[0].face!.materialIndex;
+        if (targetFace != this.interactingFace) {
             return;
         }
-        const xOverflowEnabled = this.getXOverflowEnabledForFace(face);
-        const displaySize = this.cubeSelection.getSizeVector(this.interactingFace).clone();
+        if (this.context.singleFaceMode && targetFace != this.context.singleFace) {
+            return console.warn("Interaction on face", CubeFace[targetFace], "not allowed in single face mode");
+        }
+        const xOverflowEnabled = this.getXOverflowEnabledForFace(targetFace);
+        const displaySize = this.cubeSelection.getDisplaySizeVector2d(this.interactingFace).clone();
         const uvDifference = new Vector2(ray[0].uv!.x - this.panStartUv.x, (ray[0].uv!.y - this.panStartUv.y));
-        const newDisplayOffset = uvDifference.multiply(displaySize).sub(this.panStartDisplayOffset);
-        newDisplayOffset.multiplyScalar(-1);
-        const minimumDisplayOffset = this.getMinimumDisplayOffset(face);
-        const maximumDisplayOffset = this.getMaximumDisplayOffset(face, displaySize);
+        const newDisplayOffset = uvDifference.multiply(displaySize).sub(this.panStartDisplayOffset).multiplyScalar(-1);
+        const minimumDisplayOffset = this.getMinimumDisplayOffset(targetFace);
+        const maximumDisplayOffset = this.getMaximumDisplayOffset(targetFace, displaySize);
         const unclampedNewDisplayOffset = newDisplayOffset.clone();
         if (xOverflowEnabled) {
             newDisplayOffset.y = clamp(newDisplayOffset.y, minimumDisplayOffset.y, maximumDisplayOffset.y);
-            newDisplayOffset.x = this.normalizeOverflowingXValue(newDisplayOffset.x, face);
+            newDisplayOffset.x = this.normalizeOverflowingXValue(newDisplayOffset.x, targetFace);
         } else {
             newDisplayOffset.clamp(minimumDisplayOffset, maximumDisplayOffset);
         }
         this.cubeSelection.setOffsetVectorNoRounding(this.interactingFace, newDisplayOffset);
-        this.interactionFinishFace = face;
+        this.interactionFinishFace = targetFace;
         this.interactionFinishDisplayOffset = newDisplayOffset;
-        this.triggerMaxRangeIndicatorsFromOffsetIfScrolledOutSignificantly(face, unclampedNewDisplayOffset, displaySize);
+        const anyIndicatorTriggered = this.triggerMaxRangeIndicatorsFromOffsetIfScrolledOutSignificantly(targetFace, unclampedNewDisplayOffset, displaySize);
+        this.interactionWasSimpleClick = this.interactionWasSimpleClick && this.cubeSelection.getDisplayOffsetVector2d(this.interactingFace).distanceTo(this.panStartDisplayOffset) < 2 && !anyIndicatorTriggered;
+        if (this.panMoveCalled % 10 == 0) {
+            this.triggerTileDownloads2d(targetFace);
+        }
     }
 
     onZoom(eventPositions: (MouseEvent | Touch)[], zoomDelta: number, immediate: boolean = false) {
@@ -1987,7 +1169,7 @@ class CubeInteraction {
         for (let i = 0; i < eventPositions.length; i++) {
             // position = eventPositions[i];             
             const localEventPosition = this.getLocalEventPosition(eventPositions[i]);
-            ray = this.context.rendering.raycastWindowPosition(localEventPosition.x, localEventPosition.y);
+            ray = this.context.rendering.raycastWindowPosition(localEventPosition.x, localEventPosition.y).ray;
             if (ray && ray[0]) {
                 break;
             }
@@ -1997,20 +1179,23 @@ class CubeInteraction {
             this.currentZoomFace = r[0]!.face!.materialIndex;
         }
         if (!r[0]) {
-            console.warn("No ray intersection during zoom event");
+            return console.warn("No ray intersection during zoom event");
         }
-        let uv = r[0].uv! || new Vector2(0.5, 0.5);
-        if (eventPositions.length == 2) {
-            const middle = this.getLocalEventPosition(eventPositions[0]).add(this.getLocalEventPosition(eventPositions[1])).multiplyScalar(0.5);
-            const middleRay = this.context.rendering.raycastWindowPosition(middle.x, middle.y);
-            if (middleRay && middleRay[0].face?.materialIndex == this.currentZoomFace) {
-                uv = middleRay[0].uv!;
-            }
-        } else if (eventPositions.length == 1) {
-            uv = r[0].uv!;
-        } else {
-            console.warn("No behavior for zooming with 3 or more positions")
+        if (!r[0].uv || !r[0].face) {
+            return console.warn("No UV or face information in ray intersection during zoom event");
         }
+        let uv = r[0].uv ? r[0].uv : new Vector2(0.5, 0.5);
+        // if (eventPositions.length == 2) {
+        //     const middle = this.getLocalEventPosition(eventPositions[0]).add(this.getLocalEventPosition(eventPositions[1])).multiplyScalar(0.5);
+        //     const middleRay = this.context.rendering.raycastWindowPosition(middle.x, middle.y);
+        //     if (middleRay && middleRay[0].face?.materialIndex == this.currentZoomFace) {
+        //         uv = middleRay[0].uv!;
+        //     }
+        // } else if (eventPositions.length == 1) {
+        //     uv = r[0].uv!;
+        // } else {
+        //     console.warn("No behavior for zooming with 3 or more positions")
+        // }
         if (Math.abs(zoomDelta) > 0.001) {
             this.changeZoomOnFace(Math.sign(zoomDelta) * clamp(Math.abs(zoomDelta), 0.001, 20.0) * 3, immediate ? r[0].face!.materialIndex : this.currentZoomFace, uv, immediate);
             return true;
@@ -2022,25 +1207,7 @@ class CubeInteraction {
     updateWidgetColormap: (name: string) => void = () => {};
 
     private updateColormapOverrideRangesFromUi(updateColormap: boolean = true) {
-        const td = this.context.tileData;
-        if (this.htmlColormapMinInputDiv.value != "" && !isNaN(parseFloat(this.htmlColormapMinInputDiv.value))) {
-            td.colormapMinValueOverride = parseFloat(this.htmlColormapMinInputDiv.value);
-        } else {
-            this.htmlColormapMinInputDiv.value = "";
-            td.colormapMinValueOverride = null;
-        }
-        if (this.htmlColormapMaxInputDiv.value != "" && !isNaN(parseFloat(this.htmlColormapMaxInputDiv.value))) {
-            td.colormapMaxValueOverride = parseFloat(this.htmlColormapMaxInputDiv.value);
-        } else {
-            this.htmlColormapMaxInputDiv.value = "";
-            td.colormapMaxValueOverride = null;
-        }
-        if (this.context.widgetMode) {
-            this.updateWidgetModelColormapRange(td.colormapMinValueOverride, td.colormapMaxValueOverride);
-        }
-        if (updateColormap) {
-            td.colormapHasChanged(true, false);
-        }
+        this.colormapUi.updateOverrideRangesFromUi(updateColormap);
     }
 
     private updateHoverInfo(mousePosition: Vector2 | undefined = undefined) {
@@ -2050,56 +1217,69 @@ class CubeInteraction {
             }
             mousePosition = this.lastHoverMousePosition;
         }
-        const r = this.context.rendering.raycastWindowPosition(mousePosition.x, mousePosition.y);
-        const face = r[0].face!.materialIndex;
-        const uv = r[0].uv!;
-        const offset = this.cubeSelection.getOffsetVector(face).clone();
-        const size = this.cubeSelection.getSizeVector(face).clone();
-        const hoverPosition = size.multiply(uv).add(offset);
-        hoverPosition.x = positiveModulo(hoverPosition.x, this.cubeDimensions.totalWidthForFace(face))
-        const lod = this.context.rendering.lods[face];
-        const lodAdjustedTileSize = (Math.pow(2, lod) * TILE_SIZE);
-        const tileX = Math.floor(hoverPosition.x / lodAdjustedTileSize);
-        const tileY = Math.floor(hoverPosition.y / lodAdjustedTileSize);
-        const uvWithinTileX = (hoverPosition.x % lodAdjustedTileSize) / lodAdjustedTileSize;
-        const uvWithinTileY = (hoverPosition.y % lodAdjustedTileSize) / lodAdjustedTileSize;
-        const pixelX = Math.floor(uvWithinTileX * TILE_SIZE);
-        const pixelY = Math.floor(uvWithinTileY * TILE_SIZE);
-        const dv = this.context.tileData.getDataValue(face, lod, tileX, tileY, pixelX, pixelY);
-        this.hoverData.dataValue = dv.value;
-        this.hoverData.isDataValueNotLoaded = dv.isDataNotLoaded;
-        this.hoverData.face = face;
-        this.hoverData.tileX = tileX;
-        this.hoverData.tileY = tileY;
-        this.hoverData.pixelX = pixelX;
-        this.hoverData.pixelY = pixelY;
-        this.hoverData.x = (face <= 3) ? hoverPosition.x : this.cubeSelection.getIndexValueForFace(face);
-        this.hoverData.y = (face > 3) ? hoverPosition.x : ((face <= 1) ? hoverPosition.y : this.cubeSelection.getIndexValueForFace(face));
-        this.hoverData.z = (face > 1) ? hoverPosition.y : this.cubeSelection.getIndexValueForFace(face);
-        this.hoverData.maximumCompressionError = this.context.tileData.maxCompressionErrors.get(new Tile(face, (face <= 1 ? this.hoverData.z : (face <= 3 ? this.hoverData.y : this.hoverData.x)), lod, tileX, tileY, this.selectedCube.id, this.selectedParameterId).getHashKey());
-        this.updateHoverInfoUi();
+        const raycastResult = this.context.rendering.raycastWindowPosition(mousePosition.x, mousePosition.y);
+        const r = raycastResult.ray;
+        if (!r || r.length == 0) {
+            return;
+        }
+        if (this.context.rendering.volumeRenderingEnabled) {
+            // 3d picking
+            this.context.rendering.requestPick3d(mousePosition.x, mousePosition.y);
+        } else {
+            // 2d picking
+            const face = r[0].face!.materialIndex;
+            const uv = r[0].uv!;
+            this.hoverData.setFrom2dTileData(this.cubeSelection, this.cubeDimensions, this.context.rendering, this.context.tileData, this.selectedCube.id, this.selectedParameterId, face, uv);
+            this.updateHoverInfoUi();
+        }
         this.lastHoverMousePosition = mousePosition;
     }
 
-    private updateHoverInfoUi() {
+    receivePick3d(pickedVoxelIndex: Vector3, hit: boolean, featureId: number) {
+        if (!hit) {
+            this.changeHoverInfoUiVisibility(false);
+            return;
+        }
+        // todo: do something with featureID and the properties 
+
+        this.hoverData.setFrom3dTileData(pickedVoxelIndex, this.context.rendering.lod3d, this.cubeDimensions, this.context.tileData, this.selectedCube.id, this.selectedParameterId);
+        this.updateHoverInfoUi();
+    }
+
+    private updateHoverInfoUi(show: boolean = true) {
+        this.changeHoverInfoUiVisibility(show);
         let lines = [];
 
-        if (this.hoverData.isDataValueNotLoaded) {
-            lines.push(`Value: Data not yet loaded`)
-        } else if (isNaN(this.hoverData.dataValue)) {
-            lines.push(`Value: No Data`);
-        } else {
-            const value = `${this.toFixed(this.selectedParameter.getConvertedDataValue(this.hoverData.dataValue))}`;
-            lines.push(`Value: ${value} ${this.selectedParameter.getUnitHTML()}`);
-        }
+        // if (this.hoverData.isDataValueNotLoaded) {
+        //     lines.push(`Value: Data not yet loaded`)
+        // } else if (typeof this.hoverData.dataValue === "number") {
+        //     if (isNaN(this.hoverData.dataValue) || this.hoverData.isDataNan) {
+        //         lines.push(`Value: No Data`);
+        //     } else {
+        //         const value = `${this.toFixed(this.selectedParameter.getConvertedDataValue(this.hoverData.dataValue))}`;
+        //         lines.push(`Value: ${value} ${this.selectedParameter.getUnitHTML()}`);
+        //     }
+        // } else if (this.hoverData.dataValue instanceof Uint8Array) {
+        //     const c = this.selectedParameter.getRgbDataValueString(this.hoverData.dataValue, this.hoverData.isDataNan);
+        //     for (const color of c) {
+        //         lines.push(color);
+        //     }
+        // }
+        const valueLines = this.hoverData.getString(this, this.selectedParameter, "Value: ");
+        lines.push(valueLines);
+        
         lines.push(`${this.cubeDimensions.z.getName()}: ${this.cubeDimensions.z.getIndexString(this.hoverData.z)}${this.context.debugMode ? ` (Z / ${this.hoverData.z})` : ""}`);
         lines.push(`${this.cubeDimensions.y.getName()}: ${this.cubeDimensions.y.getIndexString(this.hoverData.y)}${this.context.debugMode ? ` (Y / ${this.hoverData.y})` : ""}`);
         lines.push(`${this.cubeDimensions.x.getName()}: ${this.cubeDimensions.x.getIndexString(this.hoverData.x)}${this.context.debugMode ? ` (X / ${this.hoverData.x})` : ""}`);
         if (this.context.debugMode) {
             lines.push(`Max. error introduced by compression in this tile: ${this.hoverData.maximumCompressionError}`)
-            lines.push(`Face: ${CubeFace[this.hoverData.face]} (${this.hoverData.face})`)
-            lines.push(`Tile x: ${this.hoverData.tileX} y: ${this.hoverData.tileY}, Pixel x: ${this.hoverData.pixelX} y: ${this.hoverData.pixelY}`)
-            lines.push(`Display Quality: ${(100 * Math.pow(0.5, this.context.rendering.lods[this.hoverData.face])).toFixed(2)}% (LoD ${this.context.rendering.lods[this.hoverData.face]})`)
+            if (this.hoverData.face !== undefined) { 
+                lines.push(`Face: ${CubeFace[this.hoverData.face]} (${this.hoverData.face})`);
+                lines.push(`Tile2D x: ${this.hoverData.tileX} y: ${this.hoverData.tileY}, Pixel x: ${this.hoverData.localTilePixelX} y: ${this.hoverData.localTilePixelY}`)
+            } else {
+                lines.push(`Tile3D x: ${this.hoverData.tileX} y: ${this.hoverData.tileY} z: ${this.hoverData.tileZ}, Voxel local x: ${this.hoverData.localTilePixelX} y: ${this.hoverData.localTilePixelY} z: ${this.hoverData.localTilePixelZ}`)
+            }
+            lines.push(`Display Quality: ${(100*Math.pow(0.5, this.hoverData.lod)).toFixed(2)}% (LoD ${this.hoverData.lod})`);
         }
 
         let html = "";
@@ -2119,28 +1299,31 @@ class CubeInteraction {
     }
 
     private clearColormapRangeUi() {
-        this.htmlColormapMinInputDiv.value = "";
-        this.htmlColormapMaxInputDiv.value = "";
+        this.colormapUi.clearRangeUi();
     }
 
     updateColormapRangeUiFromValues() {
-        this.htmlColormapMinInputDiv.value = (this.context.tileData.colormapMinValueOverride !== null) ? this.toFixed(this.context.tileData.colormapMinValueOverride) : "";
-        this.htmlColormapMaxInputDiv.value = (this.context.tileData.colormapMaxValueOverride !== null) ? this.toFixed(this.context.tileData.colormapMaxValueOverride) : "";
+        this.colormapUi.updateRangeFromValues();
     }
 
     updateColormapRangePlaceholders() {
-        const td = this.context.tileData;
-        if (this.context.expertMode) {
-            this.htmlColormapMinInputDiv.placeholder = (td.colormapUseStandardDeviation) ? `${this.toFixed(td.statisticalColormapLowerBound)} (${td.statisticalColormapLowerBound == td.observedMinValue ? "same" : this.toFixed(td.observedMinValue)})` : this.toFixed(td.observedMinValue);
-            this.htmlColormapMaxInputDiv.placeholder = (td.colormapUseStandardDeviation) ? `${this.toFixed(td.statisticalColormapUpperBound)} (${td.statisticalColormapUpperBound == td.observedMaxValue ? "same" : this.toFixed(td.observedMaxValue)})` : this.toFixed(td.observedMaxValue);
-        } else {
-            this.htmlColormapMinInputDiv.placeholder = (td.colormapUseStandardDeviation && !td.ignoreStatisticalColormapBounds) ? `${this.toFixed(td.statisticalColormapLowerBound)}` : this.toFixed(td.observedMinValue);
-            this.htmlColormapMaxInputDiv.placeholder = (td.colormapUseStandardDeviation && !td.ignoreStatisticalColormapBounds) ? `${this.toFixed(td.statisticalColormapUpperBound)}` : this.toFixed(td.observedMaxValue);
-        }
+        this.colormapUi.updateRangePlaceholders();
     }
 
-    private toFixed(float: number): string {
-        return `${Number(float.toFixed(this.floatDisplaySignificance))}`;
+    // Rounds to significant digits
+    toFixed(float: number): string {
+        return `${Number((roundToSparsity(float, Math.pow(10, -this.floatDisplaySignificance))).toFixed(this.floatDisplaySignificance))}`;
+    }
+
+    toFixedNumber(float: number): number {
+        return Number(float.toFixed(this.floatDisplaySignificance));
+    }
+    
+    getConvertedDataValue(value: number, fromTile3d: boolean = false): number {
+        if (isNaN(value) || (value === ((this.context.useHalfFloatsForTile3d && fromTile3d) ? HALF_FLOAT_NAN_REPLACEMENT_VALUE : FLOAT_NAN_REPLACEMENT_VALUE))) { // does not check NaN factor mask
+            return NaN;
+        }
+        return this.toFixedNumber(this.selectedParameter.getConvertedDataValue(value));
     }
 
     showVersionOutofDateWarning(new_version: string, old_version: string) {
@@ -2179,7 +1362,11 @@ class CubeInteraction {
 
         let lines = [];
 
-        if ((downloadsFinished + downloadsFailed) != downloadsTriggered) {
+        const isExpanding3dStorage = this.context.rendering.volumeRenderingEnabled && !this.context.tileData.isTexture3dAllocated(this.context.rendering.lod3d);
+
+        if (isExpanding3dStorage) {
+            lines.push("Expanding 3D data storage...");
+        } else if ((downloadsFinished + downloadsFailed) != downloadsTriggered) {
             const n = downloadsTriggered - (downloadsFinished + downloadsFailed);
             if (this.context.expertMode) {
                 lines.push(`${n} tile${n == 1 ? "" : "s"} downloading...`);
@@ -2206,7 +1393,7 @@ class CubeInteraction {
                     }
                 }
             } else {
-                lines.push("Downloading...");
+                lines.push("Loading...");
             }
         }
 
@@ -2249,6 +1436,7 @@ class CubeInteraction {
             });
         }
         this.setupHtmlReferences();
+        this.setupExtremeEventUi();
 
         this.htmlQualitySelect.onchange = (() => {
             this.context.rendering.displayQuality = parseFloat(this.htmlQualitySelect.selectedOptions[0].value);
@@ -2265,58 +1453,10 @@ class CubeInteraction {
             this.requestUrlFragmentUpdate();
         }
 
-        this.htmlColormapFlippedCheckbox.onchange = () => {
-            this.context.tileData.setColormapFlipped(this.htmlColormapFlippedCheckbox.checked);
-            this.context.tileData.colormapHasChanged(true, false);
-        }
-
-        this.htmlColormapPercentileCheckbox.onchange = () => {
-            this.context.tileData.colormapUseStandardDeviation = this.htmlColormapPercentileCheckbox.checked;
-            this.context.tileData.colormapHasChanged(true, false);
-        }
-
-        try {
-            // @ts-expect-error 
-            MediaStreamTrackProcessor as any; // check if on Firefox or other browser which does implement MediaStreamTrackProcessor
-            VideoEncoder as any;
-        } catch (e: unknown) {
-            this.animationRecordingSupported = false;
-            this.htmlAnimationRecordingCheckbox.disabled = true;
-            this.htmlAnimationRecordingCheckboxLabel.style.color = "grey";
-            this.htmlAnimationRecordingCheckboxLabel.innerHTML += " (not supported in this browser)";
-        }
+        // Delegate event handlers to UI managers
+        this.colormapUi.setupEventHandlers(() => this.updateColormapOverrideRangesFromUi());
+        this.animationUi.setupEventHandlers();
         this.animationRecordingSupported = true;
-
-        this.htmlAnimationRecordingCheckbox.onchange = () => {
-            this.recordAnimation = this.htmlAnimationRecordingCheckbox.checked;
-            this.htmlAnimateStartButton.style.filter = this.recordAnimation ? CSS_TURN_RED_FILTER : "";
-            this.htmlAnimationRecordingOptions.style.display = this.recordAnimation ? "contents" : "none";
-        }
-
-        this.htmlAnimationSelectedRangeOnlyCheckbox.onchange = () => {
-            this.setAnimationUseSelectedRangeOnly();
-        }
-
-        this.htmlAnimationRecordingRestartButton.onclick = () => {
-            this.startAnimation();
-        }
-
-        this.htmlAnimationRecordingStopButton.onclick = () => {
-            this.stopAnimation();
-        }
-
-        this.htmlAnimationRecordingFormatSelect.onchange = () => { 
-            this.context.rendering.setAnimationRecordingFormat(this.htmlAnimationRecordingFormatSelect.value);
-        };
-
-        this.htmlAnimationDimensionSelect.onchange = () => {
-            this.updateAnimationDimension(Dimension[this.htmlAnimationDimensionSelect.value.toUpperCase() as keyof typeof Dimension]);
-        }
-
-        this.htmlColormapRangeForm.onsubmit = (ev) => {
-            ev.preventDefault();
-            this.updateColormapOverrideRangesFromUi();
-        }
 
         const triggerFullscreen = () => {
             let elem = this.htmlParent as any;
@@ -2345,6 +1485,19 @@ class CubeInteraction {
         };
         this.htmlFullscreenButton.onclick = triggerFullscreen;
 
+        if (this.context.orchestrationMasterMode) {
+            this.htmlFullscreenButton.style.display = "none";
+            this.htmlGpsButton.style.display = "none";
+            this.htmlDataSelectButton.style.display = "none";
+            this.htmlDataSelectUi.style.display = "block";
+            this.htmlDataSelectUi.children[1].remove();
+            this.htmlDataSelectUi.children[0].remove();
+            this.htmlDownloadPrintTemplateButton.style.display = "none";
+            this.animationUi.hideRecordingSection();
+        }
+
+        
+
         this.htmlParent.addEventListener("fullscreenchange", (event) => {
             this.fullscreenActive = (document.fullscreenElement !== null);
             this.context.rendering.onWindowResize();
@@ -2352,50 +1505,23 @@ class CubeInteraction {
 
         window.onkeydown = ((ev: KeyboardEvent) => {
             if (this.context.orchestrationMinionMode && ev.key == "5") {
-                triggerFullscreen();
+                this.htmlParent.requestFullscreen().catch((e: any) => {
+                    console.error("Could not enter fullscreen mode:", e);
+                });
             }
         })
 
-        this.htmlColormapScale.onclick = () => {
-            this.htmlColormapOptions.style.display = this.htmlColormapOptions.style.display == "flex" ? "none" : "flex";
-            if (this.htmlColormapOptions.style.display == "flex") {
-                for (let categoryHeaderOrContainer of this.htmlColormapButtonList.children) {                    
-                    if (categoryHeaderOrContainer.getAttribute("collapsed") == "false") {
-                        (categoryHeaderOrContainer as any).onclick();
-                    }
-                    for (let f of categoryHeaderOrContainer.children) {
-                        if (f.classList.contains("selected")) {
-                            const header = categoryHeaderOrContainer.previousElementSibling!;
-                            if (header.getAttribute("collapsed") == "true") {
-                                (header as any).onclick();
-                            }
-                            f.scrollIntoView({ block: this.context.widgetMode ? "nearest" : "center" });
-                        }
-                    }
-                }
-            }
+        this.htmlEnableVolumeVizButton.onclick = () => {
+            this.enableVolumeVisualization();
         }
 
-        this.htmlAnimateStartButton.onmouseenter = () => {
-            this.showAnimationSettingsHover();
+        this.htmlDisableVolumeVizButton.onclick = () => {
+            this.disableVolumeVisualization();
         }
 
-        this.htmlAnimateStopButton.onmouseenter = () => {
-            this.showAnimationSettingsHover();
-        }
-
-        this.htmlAnimateStartButton.onclick = () => {
-            if (this.context.touchDevice) {
-                this.showAnimationSettingsHover();
-            }
-            this.startAnimation();
-        }
-        this.htmlAnimateStopButton.onclick = () => {
-            if (this.context.touchDevice) {
-                this.showAnimationSettingsHover();
-            }
-            this.stopAnimation();
-        }
+        // this.volumeVizRenderStyleSelect.onchange = () => {
+        //     this.updateVolumeVizRenderStyleFromUi();
+        // };
 
         if (this.context.studioMode && !this.context.widgetMode) {
             this.htmlDownloadImageButton.onclick = () => {
@@ -2415,51 +1541,102 @@ class CubeInteraction {
                     this.stopGps();
                 }
             }
+            this.htmlDownloadDatasetSubsetButton.onclick = async () => {
+                if (this.downloadSubsetInProgress) {
+                    return;
+                }
+                try {
+                    this.htmlDownloadDatasetSubsetButton.style.backgroundImage = "url('spin.gif')";
+                    this.downloadSubsetInProgress = true;
+                    const xRange = this.cubeSelection.getSelectionRangeByDimension(Dimension.X);
+                    const yRange = this.cubeSelection.getSelectionRangeByDimension(Dimension.Y);
+                    const zRange = this.cubeSelection.getSelectionRangeByDimension(Dimension.Z);
+                    await this.context.networking.downloadDatasetSubset(this.selectedCube.id, this.selectedParameterId, xRange.min, xRange.max, yRange.min, yRange.max, zRange.min, zRange.max);
+                } catch (e) {
+                    window.alert(`Could not download dataset subset - ${e}.`);
+                    console.error("Could not download dataset subset:", e);
+                } finally {
+                    this.downloadSubsetInProgress = false;
+                    this.htmlDownloadDatasetSubsetButton.style.backgroundImage = "url('download.svg')";
+                }
+            }
+        }
+
+
+        this.htmlTimeSeriesCloseButton.onclick = () => {
+            this.removeAllTimeSeries();
         }
 
         this.datasetInfoDialogWrapperDiv.onclick = () => this.datasetInfoDialogWrapperDiv.style.display = "none";
         this.getHtmlElementByClassName("dataset-info-window")!.onclick = (ev) => { ev.stopPropagation(); };
     }
-
-    showAnimationSettingsHover() {
-        this.htmlAnimationDropdown.style.display = "block";
-    }
     
+    updateVolumeVizRenderStyleFromUi() {
+        // if (this.volumeVizRenderStyleSelect.value == "2") {
+        //     this.sliderUi.volumeVizThresholdSliderDiv.style.display = "block";
+        //     this.sliderUi.volumeVizThresholdSliderLabelDiv.style.display = "block";
+        //     // this.sliderUi.volumeVizThresholdSignSelectRadioParent.style.display = "flex";
+        // } else {
+        //     this.sliderUi.volumeVizThresholdSliderDiv.style.display = "none";
+        //     this.sliderUi.volumeVizThresholdSliderLabelDiv.style.display = "none";
+        //     // this.sliderUi.volumeVizThresholdSignSelectRadioParent.style.display = "none";
+        // }
+        // this.context.rendering.setVolumeRenderStyle(parseInt(this.volumeVizRenderStyleSelect.value));
+    }
+
+    private volumeVizAvailable: boolean = false;
+
+    enableVolumeVisualization() {
+        if (!this.volumeVizAvailable) {
+            return;
+        }
+        this.htmlEnableVolumeVizButton.style.display = "none";
+        this.htmlDisableVolumeVizButton.style.display = "block";
+        this.htmlVolumeVizSection.style.display = "flex";
+        window.setTimeout(() => { // allow UI to refresh
+            this.context.rendering.toggleVolumeRenderingMode(true);
+        }, 1);
+    }
+
+    disableVolumeVisualization() {
+        this.htmlEnableVolumeVizButton.style.display = this.volumeVizAvailable ? "block" : "none"; 
+        this.htmlDisableVolumeVizButton.style.display = "none";
+        this.htmlVolumeVizSection.style.display =  "none";
+        this.context.rendering.toggleVolumeRenderingMode(false);
+    }
+
+    showAnimationSettingsHover(hideIfAlreadyShown: boolean = false) {
+        this.animationUi.showDropdown(hideIfAlreadyShown);
+    }
+
     hideMenusForTouchDevices() {
-        this.htmlAnimationDropdown.style.display = "none";
-        this.htmlColormapOptions.style.display = "none";
+        this.animationUi.hideDropdown();
+        this.colormapUi.htmlColormapOptions.style.display = "none";
     }
 
     private startRecordingAnimation() {
-        this.htmlAnimationRecordingCheckbox.disabled = true;
-        this.htmlAnimationRecordingCheckboxLabel.style.display = "none";
-        this.htmlAnimationRecordingInProgressPanel.style.display = "contents";
-        this.htmlAnimationRecordingOptions.style.display = "none";
+        this.animationUi.startRecordingUi();
         this.context.rendering.startRecordingAnimation(this.animationParameters.getFps());
     }
 
     private stopRecordingAnimation() {
-        this.htmlAnimationRecordingCheckbox.disabled = false;
-        this.htmlAnimationRecordingCheckboxLabel.style.display = "block";
-        this.htmlAnimationRecordingInProgressPanel.style.display = "none";
-        this.htmlAnimationRecordingOptions.style.display = "contents";
+        this.animationUi.stopRecordingUi();
         this.context.rendering.stopRecordingAnimation();
     }
 
     private startAnimation() {
         this.context.log("Starting animation");
         this.animationEnabled = true;
+        if (this.context.orchestrationMasterMode) {
+            this.context.networking.pushOrchestratorAnimationUpdate(true);
+        }
         this.animationFinishRequested = false;
-        this.htmlAnimationSelectedRangeOnlyCheckbox.disabled = true;
-        this.htmlAnimationDimensionSelect.disabled = true;
-        this.htmlAnimationRecordingCheckbox.disabled = true;
+        this.animationUi.disableControlsDuringAnimation();
         this.animationParameters.resetStep();
         if (this.recordAnimation) {
             this.startRecordingAnimation();
         }
-        this.htmlAnimateStartButton.style.display = "none";
-        this.htmlAnimateStopButton.style.filter = this.recordAnimation ? CSS_TURN_RED_FILTER : "";
-        this.htmlAnimateStopButton.style.display = "block";
+        this.animationUi.showStopButton(this.recordAnimation);
         this.attemptNextAnimationStep(true);
     }
 
@@ -2469,123 +1646,19 @@ class CubeInteraction {
         }
         this.context.log("Stopping animation");
         this.animationFinishRequested = true;
-        this.htmlAnimationSelectedRangeOnlyCheckbox.disabled = false;
-        this.htmlAnimationDimensionSelect.disabled = false;
-        this.htmlAnimationRecordingCheckbox.disabled = !this.animationRecordingSupported;
-        this.htmlAnimateStartButton.style.display = "block";
-        this.htmlAnimateStopButton.style.display = "none";
+        if (this.context.orchestrationMasterMode) {
+            this.context.networking.pushOrchestratorAnimationUpdate(false);
+        }
+        this.animationUi.enableControlsAfterAnimation();
+        this.animationUi.showStartButton();
         if (this.recordAnimation) {
             this.stopRecordingAnimation();
-            this.htmlAnimationRecordingRestartButton.innerText = "Processing video...";
-            this.htmlAnimationRecordingRestartButton.style.fontStyle = "italic";
-            this.htmlAnimationRecordingRestartButton.style.backgroundColor = "grey";
-            this.htmlAnimationRecordingRestartButton.disabled = true;
+            this.animationUi.showRecordingProcessingState();
         }
     }
 
     resetAnimationRecordingUiPostDownload() {
-        this.htmlAnimationRecordingRestartButton.innerText = "Start Recording";
-        this.htmlAnimationRecordingRestartButton.style.fontStyle = "";
-        this.htmlAnimationRecordingRestartButton.style.backgroundColor = "";
-        this.htmlAnimationRecordingRestartButton.disabled = false;
-    }
-
-    /**
-     * From: https://refreshless.com/nouislider/examples/
-     * @param slider HtmlElement with an initialized slider
-     * @param threshold Minimum proximity (in percentages) to merge tooltips
-     * @param separator String joining tooltips
-     */
-    private mergeSliderTooltips(slider: HTMLElement & { noUiSlider: any }, threshold: number, separator: string) {
-
-        var textIsRtl = getComputedStyle(slider).direction === 'rtl';
-        var isRtl = slider.noUiSlider.options.direction === 'rtl';
-        var isVertical = slider.noUiSlider.options.orientation === 'vertical';
-        var tooltips = slider.noUiSlider.getTooltips();
-        var origins = slider.noUiSlider.getOrigins();
-
-        // Move tooltips into the origin element. The default stylesheet handles this.
-        tooltips.forEach(function (tooltip: any, index: number) {
-            if (tooltip) {
-                origins[index].appendChild(tooltip);
-            }
-        });
-
-        slider.noUiSlider.on('update', function (values: any, handle: any, unencoded: any, tap: any, positions: any) {
-
-            var pools: number[][] = [[]];
-            var poolPositions: number[][] = [[]];
-            var poolValues: string[][] = [[]];
-            var atPool = 0;
-
-            // Assign the first tooltip to the first pool, if the tooltip is configured
-            if (tooltips[0]) {
-                pools[0][0] = 0;
-                poolPositions[0][0] = positions[0];
-                poolValues[0][0] = values[0];
-            }
-
-            for (var i = 1; i < positions.length; i++) {
-                if (!tooltips[i] || (positions[i] - positions[i - 1]) > threshold) {
-                    atPool++;
-                    pools[atPool] = [];
-                    poolValues[atPool] = [];
-                    poolPositions[atPool] = [];
-                }
-
-                if (tooltips[i]) {
-                    pools[atPool].push(i);
-                    poolValues[atPool].push(values[i]);
-                    poolPositions[atPool].push(positions[i]);
-                }
-            }
-
-            pools.forEach(function (pool, poolIndex) {
-                var handlesInPool = pool.length;
-
-                for (var j = 0; j < handlesInPool; j++) {
-                    var handleNumber = pool[j];
-
-                    if (j === handlesInPool - 1) {
-                        var offset = 0;
-
-                        poolPositions[poolIndex].forEach(function (value) {
-                            offset += 1000 - value;
-                        });
-
-                        var isRight = poolPositions[poolIndex].every(p => p > 50);
-
-                        var last = isRtl ? 0 : handlesInPool - 1;
-                        var lastOffset = 1000 - poolPositions[poolIndex][last];
-                        offset = (textIsRtl && !isVertical ? 100 : 0) + (offset / handlesInPool) - lastOffset;
-                        if (handlesInPool > 1) {
-                            if (poolPositions[poolIndex].every(p => p > 75)) {
-                                offset = clamp(offset, 15, 85);
-                            }
-                        }
-
-                        // Center this tooltip over the affected handles
-                        const formatter = (slider.noUiSlider as any).formatter;
-                        if (formatter) {
-                            tooltips[handleNumber].innerHTML = poolValues[poolIndex].map((str: string) => formatter.to(parseInt(str))).join(separator);
-                        } else {
-                            tooltips[handleNumber].innerHTML = poolValues[poolIndex].join(separator);
-                        }
-                        tooltips[handleNumber].style.display = 'block';
-                        if (handlesInPool > 1) {
-                            tooltips[handleNumber].style['right'] = isRight ? offset + '%' : 'auto';
-                            tooltips[handleNumber].style['left'] = !isRight ? (30 - offset) + '%' : 'auto';
-                        } else {
-                            tooltips[handleNumber].style['right'] = offset + '%';
-                            tooltips[handleNumber].style['left'] = 'auto';
-                        }
-                    } else {
-                        // Hide this tooltip
-                        tooltips[handleNumber].style.display = 'none';
-                    }
-                }
-            });
-        });
+        this.animationUi.resetRecordingUiPostDownload();
     }
 
     private gpsPositionReceived(position: { coords: { latitude: number, longitude: number } }) {
@@ -2626,265 +1699,590 @@ class CubeInteraction {
         this.gpsTrackingEnabled = false;
         this.context.rendering.disableGpsPosition();
         navigator.geolocation.clearWatch(this.gpsTrackingId);
-        this.context.rendering.requestRender();
-    }
-
-    private prepareSlider(div: HTMLElement, parameterUpdate: (arr: string[]) => void, viewUpdate: () => void, formatter?: PartialFormatter) {
-        let slider = noUiSlider.create(div, {
-            start: [20, 30],
-            connect: true,
-            step: 1,
-            tooltips: formatter || true,
-            behaviour: 'drag',
-            range: {
-                'min': 0,
-                'max': 100
-            }
-        });
-        (slider as any).formatter = formatter;
-
-        if (this.updateUiDuringInteractions.sliders) {
-            slider.on("slide", viewUpdate as any);
-        }
-        slider.on("slide", parameterUpdate as any);
-        slider.on("set", viewUpdate as any);
-        slider.on("set", parameterUpdate as any);
-        // slider.on("set", triggerTileDownloads);
-        // slider.on("end", triggerTileDownloads);
-        return slider;
+        this.context.rendering.requestRender(false);
     }
 
     private updateAnimationSliders() {
-        const s = this.selectedCubeMetadata.sparsity;
-
-        const constructSlidingRangeWithoutDuplicates = (arr: number[], s: number) => {
-            const o: any = {
-                'min': [arr[0], s],
-                'max': [arr[4], s]
-            }
-            if (arr[1] != arr[0]) {
-                o['25%'] = [arr[1], s];
-            }
-            if (arr[2] != arr[1]) {
-                o['50%'] = [arr[2], s];
-            }
-            if (arr[3] != arr[2]) {
-                o['75%'] = [arr[3], s];
-            }
-            return o;
-        };
-
-        const windowRange = this.animationParameters.getExponentialRangeFromLinearRange(this.animationParameters.getRangeForVisibleWindow());
-        this.animationWindowSlider.updateOptions({
-            range: constructSlidingRangeWithoutDuplicates(windowRange, s),
-            start: [this.animationParameters.getVisibleWindow()],
-            step: s,
-            margin: s,
-        }, false);
-
-        const incrementRange = this.animationParameters.getExponentialRangeFromLinearRange(this.animationParameters.getRangeForIncrementPerStep());
-        this.animationIncrementSlider.updateOptions({
-            range: constructSlidingRangeWithoutDuplicates(incrementRange, s),
-            start: [this.animationParameters.getIncrementPerStep()],
-            step: s,
-            margin: s,
-        }, false);
-
-        this.animationSpeedSlider.updateOptions({
-            range: {
-                min: this.animationParameters.getRangeForFps()[0],
-                max: this.animationParameters.getRangeForFps()[1]
-            },
-            start: [this.animationParameters.getFps()],
-            step: 1,
-            margin: 1,
-        }, false);
-        
+        this.sliderUi.updateAnimationSliders();
     }
 
     private updateAnimationDurationLabel() {
-        this.htmlAnimationTotalDurationDiv.innerHTML = `${this.animationParameters.getFormattedDurationInSeconds()}`;
+        this.sliderUi.updateAnimationDurationLabel();
     }
 
-    private prepareAnimationSliders() {
-        let basicSlider = (div: HTMLElement) => {
-            return noUiSlider.create(div, {
-                start: [0],
-                connect: false,
-                step: 1,
-                tooltips: true,
-                behaviour: 'drag',
-                range: {
-                    'min': 0,
-                    'max': 100
-                }
-            });
-        }
-        this.animationIncrementSlider = basicSlider(this.htmlAnimationIncrementSliderDiv);
-        this.animationWindowSlider = basicSlider(this.htmlAnimationWindowSliderDiv);
-        this.animationSpeedSlider = basicSlider(this.htmlAnimationSpeedSliderDiv);
-
-        const updateAnimationIncrement = (newRange: string[]) => {
-            const v = parseInt(newRange[0]);
-            this.animationParameters.setIncrementPerStep(v);
-        }
-        const windowAndIncrementFormatter = {
-            to: (value: number) => {
-                if (!this.animationParameters) {
-                    return `${value}`;
-                }
-                return this.animationParameters.indexDifferenceToString(Math.abs(Math.round(value)));
-            },
-        }
-        this.animationIncrementSlider.updateOptions({ tooltips: windowAndIncrementFormatter }, false);
-        this.animationIncrementSlider.on("slide", updateAnimationIncrement as any);
-        this.animationIncrementSlider.on("set", updateAnimationIncrement as any);
-
-        const updateAnimationWindow = (newRange: string[]) => {
-            const v = parseInt(newRange[0]);
-            this.animationParameters.setVisibleWindow(v);
-        }
-        this.animationWindowSlider.updateOptions({ tooltips: windowAndIncrementFormatter }, false);
-        this.animationWindowSlider.on("slide", updateAnimationWindow as any);
-        this.animationWindowSlider.on("set", updateAnimationWindow as any);
-
-        const updateAnimationSpeed = (newRange: string[]) => {
-            const v = parseFloat(newRange[0]);
-            this.animationParameters.setFps(v);
-        }
-        const speedFormatter = {
-            to: (value: number) => {
-                return `${Math.round(value).toFixed(0)} FPS`;
-            },
-        }
-        this.animationSpeedSlider.updateOptions({ tooltips: speedFormatter }, false);
-        this.animationSpeedSlider.on("slide", updateAnimationSpeed as any);
-        this.animationSpeedSlider.on("set", updateAnimationSpeed as any);
+    private resetTimeSeries() {
+        this.timeSeries = [];
     }
 
+    private prepareTimeSeriesChart() {
+        Chart.defaults.color = 'white';
+        
+        (Tooltip.positioners as any).aboveChart = (items: readonly ActiveElement[])  => {
+            if (items.length === 0) {
+                return false;
+            }
+            const chart = this.timeSeriesChart;
+            
+            return {
+                x: items[0].element.x,
+                y: chart.chartArea.bottom,
+                xAlign: 'center',
+                yAlign: 'top'
+            };
+        };
+        this.timeSeriesChart = new Chart(this.htmlTimeSeriesCanvas, {
+            type: "line",
+            data: {
+                labels: [],
+                datasets: []
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                interaction: {
+                    mode: 'index',
+                    intersect: false
+                },
+                scales: {
+                    x: {
+                        grid: {
+                            color: '#ffffff6d',
+                        },
+                        ticks: {
+                            maxTicksLimit: 8,
+                        }
+                    },
+                    y: {
+                        ticks: {
+                            autoSkip: true,
+                            maxTicksLimit: 8,
+                            callback: (value, index, values) => {
+                                if (typeof value === "string") {
+                                    return value;
+                                }
+                                const tickDifference = values.length > 1 ? Math.abs(values[1].value - values[0].value) : 0;
+                                const significantDigits = tickDifference > 0 ? Math.max(0, -Math.floor(Math.log10(tickDifference))) : this.floatDisplaySignificance;
+                                const unit = this.selectedParameter ? this.selectedParameter.getUnit() : "";
+                                return `${value.toFixed(significantDigits)}${unit}`;
+                            }
+                        },
+                        grid: {
+                            color: '#ffffff6d',
+                        },
+                    }
+                },
+                animation: {
+                    duration: 500,
+                },
+                plugins: {
+                    tooltip: {
+                        position: "aboveChart" as any,
+                        multiKeyBackground: '#00000000',
+                        usePointStyle: true,
+                        boxWidth: 10,
+                        boxHeight: 10,
+                        callbacks: {
+                            labelColor: (context) => {
+                                return {
+                                    borderColor: context.dataset.borderColor as string,
+                                    backgroundColor: context.dataset.borderColor as string,
+                                };
+                            },
+                        }
+                        
+                    },
+                    legend: {
+                        display: false,
+                    }
+                }
+            }
+        });
+    }
 
-    private prepareUiSliders() {
-        this.setupRangeSliders();
+    // prevent mousedown + touchstart event in same frame
+    private checkContextLayerInteractionCooldown() { 
+        if (Date.now() - this.lastContextLayerInteraction < this.CONTEXT_LAYER_INTERACTION_COOLDOWN_MS) {
+            return false;
+        }
+        this.lastContextLayerInteraction = Date.now();
+        return true;
+    }
 
-        this.prepareAnimationSliders();
+    private createOrDeleteTimeSeries(face: CubeFace, uv: Vector2) {
+        if (!this.checkContextLayerInteractionCooldown()) {
+            return;
+        }
+        const pickedValue = new PickedDataValue().setFrom2dTileData(this.cubeSelection, this.cubeDimensions, this.context.rendering, this.context.tileData, this.selectedCube.id, this.selectedParameterId, face, uv);
+ 
+        const xRange = this.cubeDimensions.getParameterRangeByDimension(Dimension.X);
+        const yRange = this.cubeDimensions.getParameterRangeByDimension(Dimension.Y);
 
-        const allSliders = this.htmlParent.getElementsByClassName("noUi-connect");
-        for (let s of allSliders) {
-            (s as any).style.background = "#36082a";
+        // round to sparsity since otherwise we have no tiles available to fill the time series
+        const nearestValidX = roundToSparsityWithinRange(Math.floor(pickedValue.x), this.selectedCubeMetadata.sparsity, xRange.min, xRange.max - 1);
+        const nearestValidY = roundToSparsityWithinRange(Math.floor(pickedValue.y), this.selectedCubeMetadata.sparsity, yRange.min, yRange.max - 1);
+
+        const existingTimeSeriesAtThisPosition = this.timeSeries.find(ts => ts.x == nearestValidX && ts.y == nearestValidY);
+        if (existingTimeSeriesAtThisPosition) {
+            this.removeTimeSeries(existingTimeSeriesAtThisPosition.id);
+            return;
+        }
+        this.addTimeSeries(face, nearestValidX, nearestValidY);
+    }
+
+    private updateTimeSeriesChart() {
+        this.timeSeriesChart.options.plugins!.tooltip!.callbacks!.label = (context) => {
+            return `${context.parsed.y}${this.selectedParameter.getUnit()}`; //  (${context.dataset.label})
+        }    
+
+        const timeSteps = this.cubeDimensions.z.steps;
+        const timeLabels = range(0, timeSteps - 1).map((_, i) => this.cubeDimensions.z.getIndexString(i));
+        
+        this.timeSeriesChart.data.labels = timeLabels;
+
+        for (let i = 0; i < this.timeSeries.length; i++) {
+            const ts = this.timeSeries[i];
+            if (i >= this.timeSeriesChart.data.datasets.length) {
+                this.timeSeriesChart.data.datasets.push({
+                    data: [],
+                    fill: false,
+                    borderColor: ts.getPointColor(),
+                    borderWidth: 1.5,
+                    pointHoverRadius: 4,
+                    hoverBorderWidth: 2,
+                    hoverBorderColor: "white",
+                    hoverBackgroundColor: "transparent",
+                    tension: 0.0,
+                    pointStyle: "circle",
+                    pointRadius: 0,
+                    pointHitRadius: 7,
+                    pointBorderColor: ts.getPointColor(),
+                    animation: false,
+                });
+            }
+            const ds = this.timeSeriesChart.data.datasets[i];
+            if (!ts.data || ts.data.length === 0) {
+                const lonString = this.cubeDimensions.x.getIndexString(ts.x);
+                const latString = this.cubeDimensions.y.getIndexString(ts.y);
+                ds.label = `@ ${latString}, ${lonString}`;
+                ts.data = Array(timeSteps).fill(NaN);
+            }
+            ds.data = ts.data;
+            ds.borderColor = ts.getPointColor();
+            ds.pointBorderColor = ts.getPointColor();
+        }
+
+        if (this.timeSeries.length < this.timeSeriesChart.data.datasets.length) {
+            this.timeSeriesChart.data.datasets.splice(this.timeSeries.length, this.timeSeriesChart.data.datasets.length - this.timeSeries.length);
+        }
+
+        this.htmlTimeSeriesDiv.style.display = this.timeSeries.length > 0 ? "block" : "none";
+        this.timeSeriesChart.update("none");
+    }
+
+    updateTimeSeriesChartPosition() {
+        if (!this.htmlTimeSeriesDiv) {
+            return;
+        }
+        if (this.context.screenOrientation == DeviceOrientation.Landscape) {
+            this.htmlTimeSeriesDiv.style.width = "25%";
+            this.htmlTimeSeriesDiv.style.height = this.context.widgetMode ? "42%" : "32%";
+            this.htmlTimeSeriesDiv.parentElement?.classList.add("flex-row-center-end");
+            this.htmlTimeSeriesDiv.parentElement?.classList.remove("flex-col-center-end");
+        } else {
+            this.htmlTimeSeriesDiv.style.width = "95%";
+            this.htmlTimeSeriesDiv.style.height = "24%";
+            this.htmlTimeSeriesDiv.parentElement?.classList.add("flex-col-center-end");
+            this.htmlTimeSeriesDiv.parentElement?.classList.remove("flex-row-center-end");
         }
     }
 
-    private setupRangeSliders() {
-        const zUpdate = (newRange: string[]) => {
-            this.cubeSelection.setRange(Dimension.Z, parseInt(newRange[0]), parseInt(newRange[1]));
+    updateTimeSeriesSelectionBounds() {
+        if (Object.keys(this.timeSeriesChart.scales).length == 0) {
+            return; // chart not initialized yet
         }
-        const yUpdate = (newRange: string[]) => {
-            this.cubeSelection.setRange(Dimension.Y, parseInt(newRange[0]), parseInt(newRange[1]));
+        const zSelection = this.cubeSelection.getSelectionRangeByDimension(Dimension.Z);
+        const newMin = zSelection.min;
+        const newMax = zSelection.max - 1;
+        if (this.timeSeriesChart.scales.x.options.min === newMin && this.timeSeriesChart.scales.x.options.max === newMax) {
+            return; // no change
         }
-        const xUpdate = (newRange: string[]) => {
-            this.cubeSelection.setRange(Dimension.X, parseInt(newRange[0]), parseInt(newRange[1]));
-        }
-
-        const viewUpdate = () => {
-            this.context.rendering.updateVisibilityAndLods();
-            this.cubeSelection.updateSelectionRelevantUi(true, false);
-        }
-
-        const zFormatter = {
-            to: (value: number) => {
-                const dims = this.context.interaction.cubeDimensions;
-                if (typeof dims === "undefined") {
-                    return ''
-                }
-                return dims.z.getIndexString(value);
-            },
-        }
-        const yFormatter = {
-            to: (value: number) => {
-                const dims = this.context.interaction.cubeDimensions;
-                if (typeof dims === "undefined") {
-                    return ''
-                }
-                return dims.y.getIndexString(value);
-            },
-        }
-        const xFormatter = {
-            to: (value: number) => {
-                const dims = this.context.interaction.cubeDimensions;
-                if (typeof dims === "undefined") {
-                    return ''
-                }
-                return dims.x.getIndexString(value);
-            },
-        }
-        this.zSelectionSlider = this.prepareSlider(this.zSliderDiv, zUpdate, viewUpdate, zFormatter);
-        this.ySelectionSlider = this.prepareSlider(this.ySliderDiv, yUpdate, viewUpdate, yFormatter);
-        this.xSelectionSlider = this.prepareSlider(this.xSliderDiv, xUpdate, viewUpdate, xFormatter);
+        this.timeSeriesChart.scales.x.options.min = newMin;
+        this.timeSeriesChart.scales.x.options.max = newMax;
+        this.timeSeriesChart.update('none');
     }
 
+    private getAvailableTimeSeriesColor(): string {
+        const pointColors = [
+            '#E69F00',  // Orange
+            '#56B4E9',  // Sky Blue
+            '#009E73',  // Bluish Green
+            '#0072B2',  // Blue
+            '#D55E00',  // Vermilion
+            '#CC79A7',  // Reddish Purple
+            '#999999',  // Gray
+        ];
+
+        // find the next color that is not used yet
+        for (let i = 0; i < pointColors.length; i++) {
+            const color = pointColors[i];
+            let colorInUse = false;
+            for (const ts of this.timeSeries) {
+                if (ts.getPointColor() == color) {
+                    colorInUse = true;
+                    break;
+                }
+            }
+            if (!colorInUse) {
+                return color;
+            }
+        }
+        throw new Error("All point colors are already in use");
+    }
+
+    private readonly MAXIMUM_TIME_SERIES = 7;
+
+    private addTimeSeries(face: CubeFace, x: number, y: number) {
+        if (this.timeSeries.length >= this.MAXIMUM_TIME_SERIES) {
+            this.removeTimeSeries(this.timeSeries[0].id);
+        }
+
+        const series = new TimeSeries(face, x, y, this.getAvailableTimeSeriesColor());
+        this.timeSeries.push(series);
+        this.updateTimeSeriesChart();
+
+        series.marker = this.context.rendering.addTimeSeriesMarker(series.id, face, x, y, series.getPointColor());
+        this.context.rendering.updateRegionBorderPositionAndResolution();
+        this.context.tileData.requestTimeSeriesData(series.id, series.getRequestedDataRange(), this.cubeDimensions.getParameterRangeByDimension(Dimension.Z));
+    }
+
+    private removeAllTimeSeries() {
+        for (let i = this.timeSeries.length - 1; i >= 0; i--) {
+            this.removeTimeSeries(this.timeSeries[i].id);
+        }
+    }
+
+    private removeTimeSeries(id: number) {
+        this.context.log("Removing time series id ", id);
+        const index = this.timeSeries.findIndex(ts => ts.id == id);
+        if (index >= 0) {
+            const ts = this.timeSeries[index];
+            this.timeSeries.splice(index, 1);
+            if (ts.marker) {
+                this.context.rendering.removeTimeSeriesMarker(ts.marker);
+                this.context.rendering.requestRender(false);
+            }
+        } else {
+            console.error("removeTimeSeries: Could not find time series with id ", id);
+        }
+        this.updateTimeSeriesChart();
+    }
+
+    getTimeSeries(timeSeriesId: number) {
+        return this.timeSeries.find(ts => ts.id == timeSeriesId);
+    }
+
+    updateTimeSeriesData(timeSeriesId: number, newData: number[], zStart: number) {
+        if (!this.timeSeries) {
+            console.warn("updateTimeSeriesData: No time series object created yet");
+            return;
+        }
+        const ts = this.getTimeSeries(timeSeriesId);
+        if (!ts) {
+            console.error("updateTimeSeriesData: Could not find time series with id ", timeSeriesId);
+            return;
+        }
+        const complete = ts.insertData(newData, zStart, this);
+        this.context.log(`Updated time series id ${timeSeriesId} with data of length ${Math.min(newData.length, ts.data.length - zStart)} starting at Z index ${zStart}`);
+        
+        if (complete) {
+            this.timeSeriesChart.update("none");
+        }
+        // this.updateTimeSeriesSelectionBounds();
+    }
+
+    private highlightTimeSeries(timeSeriesId: number) {
+        const yMin = this.timeSeriesChart.scales.y.min;
+        const yMax = this.timeSeriesChart.scales.y.max;
+        for (let i = 0; i < this.timeSeries.length; i++) {
+            const ts = this.timeSeries[i];
+            const hidden = ts.id !== timeSeriesId;
+            this.timeSeriesChart.data.datasets[i].borderColor = ts.getPointColor() + (hidden ? "33" : "");
+        }
+        this.timeSeriesChart.scales.y.options.min = yMin;
+        this.timeSeriesChart.scales.y.options.max = yMax;
+        this.timeSeriesChart.update();
+    }
+
+    private unhighlightTimeSeries() {
+        for (let i = 0; i < this.timeSeries.length; i++) {
+            const ts = this.timeSeries[i];
+            this.timeSeriesChart.data.datasets[i].borderColor = ts.getPointColor();
+        }
+        this.timeSeriesChart.scales.y.options.min = undefined;
+        this.timeSeriesChart.scales.y.options.max = undefined;
+        this.timeSeriesChart.update();
+    }
+    
     private updateSliderLabels() {
-        this.zSliderLabelDiv.innerHTML = `${this.cubeDimensions.z.getName()}:`;
-        this.ySliderLabelDiv.innerHTML = `${this.cubeDimensions.y.getName()}:`;
-        this.xSliderLabelDiv.innerHTML = `${this.cubeDimensions.x.getName()}:`;
+        this.sliderUi.updateDimensionSliderLabels();
     }
 
     private updateSelectionUiRangeBounds() {
-        const zRange = this.cubeDimensions.zParameterRange;
-        const yRange = this.cubeDimensions.yParameterRange;
-        const xRange = this.cubeDimensions.xParameterRange;
-        this.zSelectionSlider.updateOptions({ range: { min: zRange.min, max: zRange.max - 1 }, step: this.selectedCubeMetadata.sparsity, margin: this.selectedCubeMetadata.sparsity }, false);
-        this.ySelectionSlider.updateOptions({ range: { min: yRange.min, max: yRange.max - 1 }, step: this.selectedCubeMetadata.sparsity, margin: this.selectedCubeMetadata.sparsity }, false);
-        this.xSelectionSlider.updateOptions({ range: { min: xRange.min, max: xRange.max - 1 }, step: this.selectedCubeMetadata.sparsity, margin: this.selectedCubeMetadata.sparsity }, false);
-        this.zSelectionSlider.off("update");
-        this.ySelectionSlider.off("update");
-        this.xSelectionSlider.off("update");
-        this.mergeSliderTooltips(this.zSliderDiv as any, 40, " - ");
-        if (this.geospatialContextProvided) {
-            this.mergeSliderTooltips(this.ySliderDiv as any, 40, " - ");
-            this.mergeSliderTooltips(this.xSliderDiv as any, 40, " - ");
+        this.sliderUi.updateSelectionRangeBounds();
+    }
+
+    private currentParameterHasExtremesAvailable() {
+        return false;
+    }
+
+    private selectExtremeEventTypeByCharacteristics(thresholdTarget: ExtremeThresholdTarget | undefined, thresholdType: ExtremeThresholdType | undefined, spatialQuantileContext: ExtremeSpatialQuantileContext | undefined) {
+        // select the next available extreme event type
+        if (!this.currentParameterHasExtremesAvailable()) {
+            return;
+        }
+
+        const t = this.availableExtremeTypes.find(extremeType => {
+            const seekedTarget = (thresholdTarget ?? this.currentExtremeType.thresholdTarget);
+            const seekedType = (thresholdType ?? this.currentExtremeType.thresholdType);
+            const seekedContext = (spatialQuantileContext ?? this.currentExtremeType.spatialQuantileContext);
+            
+            if (seekedType == ExtremeThresholdType.Absolute) {
+                return extremeType.thresholdTarget == seekedTarget &&
+                    extremeType.thresholdType == seekedType;
+            }
+            
+            // AllTimeSeries desired if no SpatialContext but we need one for quantile
+            if (seekedContext == undefined) {
+                return extremeType.thresholdTarget == seekedTarget &&
+                    extremeType.thresholdType == seekedType &&
+                    extremeType.spatialQuantileContext == ExtremeSpatialQuantileContext.AllTimeSeries;
+            }
+            
+            return extremeType.thresholdTarget == seekedTarget &&
+                extremeType.thresholdType == seekedType &&
+                extremeType.spatialQuantileContext == seekedContext;
+        });
+
+        if (!t) {
+            console.warn("Could not find extreme event type with characteristics ", { thresholdTarget, thresholdType, spatialQuantileContext });
+            return;
+        }
+
+        this.setExtremeEventType(t);
+    }
+
+    private setupExtremeEventUi() {
+        if (this.context.widgetMode) {
+            return;
+        }
+        this.htmlVolumeVizThresholdTarget.onclick = () => {
+            console.log(`current threshold target: ${this.currentExtremeType.thresholdTarget}, cycling to next..., (${Object.keys(ExtremeThresholdTarget).length} total)`);
+            this.selectExtremeEventTypeByCharacteristics(
+                (this.currentExtremeType.thresholdTarget + 1) % (Object.keys(ExtremeThresholdTarget).length / 2), 
+                undefined, 
+                undefined
+            );
+        };
+
+        this.htmlVolumeVizThresholdType.onclick = () => {
+            this.selectExtremeEventTypeByCharacteristics(
+                undefined, 
+                (this.currentExtremeType.thresholdType + 1) % (Object.keys(ExtremeThresholdType).length / 2), 
+                undefined
+            );
+        }
+
+        this.htmlVolumeVizThresholdSpatialQuantileContext.onclick = () => {
+            if (this.currentExtremeType.thresholdType != ExtremeThresholdType.Quantile || this.currentExtremeType.spatialQuantileContext == null) {
+                return;
+            }
+            this.selectExtremeEventTypeByCharacteristics(
+                undefined, 
+                undefined, 
+                (this.currentExtremeType.spatialQuantileContext + 1) % (Object.keys(ExtremeSpatialQuantileContext).length / 2)
+            );
         }
     }
 
-    updateSlidersAndLabelsAfterChange(updateSliders: boolean = true, updateLabels: boolean = true, dimensionsOnly: Dimension[] = []) {
+    private setExtremeEventType(extremeType: ExtremeType) {
+        this.currentExtremeType = extremeType;
+        this.setVolumeRenderingUseQuantileOverAbsoluteThreshold(extremeType.thresholdType == ExtremeThresholdType.Quantile);
+        this.updateExtremeTypeText();
+    }
+
+    private updateExtremeTypeText() {
+        if (!this.selectedParameter) {
+            return;
+        }
+        // update UI based on currentExtremeType
+        this.htmlVolumeVizThresholdTarget.innerHTML = this.currentExtremeType.thresholdTarget == ExtremeThresholdTarget.Observations ? "observations" : "anomalies (deviations from mean seasonal cycle)";
+        const thresholdPrefix = this.getVolumeRenderingThresholdSign() == -1 ? "below" : (this.getVolumeRenderingThresholdSign() == 1 ? "above" : "equals");
+        const absoluteThresholdString = `${this.toFixed(this.getVolumeRenderingAbsoluteThreshold())}${this.selectedParameter.getUnit()}`;
+        const quantileThresholdString = `the ${(this.getVolumeRenderingQuantileThresholdValue()*100).toFixed(0)}th percentile`;
+        this.htmlVolumeVizThresholdType.innerHTML = thresholdPrefix + " " + (this.currentExtremeType.thresholdType == ExtremeThresholdType.Quantile ? quantileThresholdString : absoluteThresholdString);
+        this.htmlVolumeVizThresholdSpatialQuantileContext.innerHTML = this.currentExtremeType.spatialQuantileContext == ExtremeSpatialQuantileContext.AllTimeSeries ? "across all locations" : (this.currentExtremeType.spatialQuantileContext == ExtremeSpatialQuantileContext.PcaGroupedTimeSeries ? "across phenologically similar locations (grouped via a PCA)" : "in their location");
+        this.htmlVolumeVizThresholdSpatialQuantileContext.style.display = this.currentExtremeType.thresholdType == ExtremeThresholdType.Quantile ? "" : "none";
+    }
+
+    private resetExtremeEventTypeAndUi() {
+        this.setExtremeEventType(this.availableExtremeTypes[0]);
+
+        const extremesAvailable = this.currentParameterHasExtremesAvailable();
+
+        if (extremesAvailable) {
+            this.context.networking.downloadEventData(this.selectedCube.id, this.selectedParameterId, "QLO_i0_q0.01"); // todo
+        }
+
+        this.htmlVolumeVizDescriptionRow.style.display = extremesAvailable ? "" : "none";
+    }
+
+    updateVolumeVizVisibilityThresholdBounds(setThreshold: boolean = false) {
+        if (!setThreshold && !this.context.widgetMode) {
+            return;
+        }
+        const colormapMin = this.context.tileData.getColormapMinValue();
+        const colormapMax = this.context.tileData.getColormapMaxValue();
+        const desiredMin = (colormapMin !== null && colormapMin != colormapMax) ? colormapMin : (this.selectedParameter.realisticMinimumValueViaQuantiles !== undefined ? this.selectedParameter.realisticMinimumValueViaQuantiles : (this.context.tileData.observedMinValue !== null ? this.context.tileData.observedMinValue : NaN));
+        const desiredMax = (colormapMax !== null && colormapMin != colormapMax) ? colormapMax : (this.selectedParameter.realisticMaximumValueViaQuantiles !== undefined ? this.selectedParameter.realisticMaximumValueViaQuantiles : (this.context.tileData.observedMaxValue !== null ? this.context.tileData.observedMaxValue : NaN));
+        const newRange = {
+            min: Math.floor(desiredMin),
+            max: Math.ceil(desiredMax),
+        }
+        if (this.selectedParameter.isAnomalyParameter()) {
+            const p = Math.max(Math.abs(this.selectedParameter.realisticMinimumValueViaQuantiles), Math.abs(this.selectedParameter.realisticMaximumValueViaQuantiles)) * 0.4;
+            newRange.min = -Math.floor(p);
+            newRange.max = Math.ceil(p);
+        }
+        const threshold = 0.7 * (this.selectedParameter.realisticMaximumValueViaQuantiles - this.selectedParameter.realisticMinimumValueViaQuantiles) + this.selectedParameter.realisticMinimumValueViaQuantiles;
+
+        const stepBasedOnLocalRange = Math.pow(10, Math.floor(Math.log10((newRange.max - newRange.min) / 100)));
+        const stepBasedOnFloatSignificance = Math.pow(10, -this.floatDisplaySignificance);
+        const newStep = Math.min(stepBasedOnLocalRange, stepBasedOnFloatSignificance);
+        if (isNaN(newRange.min) || isNaN(newRange.max) || isNaN(newStep)) {
+            return;
+        }
+
+        const newOptions = {
+            range: {
+                min: newRange.min,
+                max: newRange.max,
+            },
+            step: newStep,
+        };
+
+        this.sliderUi.setNewThresholdAndRangeOptions(newOptions);
+
+        if (setThreshold) {
+            this.setVolumeRenderingAbsoluteThreshold(threshold);
+        }
+    }
+
+    private resetVolumeVizVisibilityThresholdBoundsForNewParameter() {
+        if (this.context.widgetMode) {
+            return;
+        }
+
+        this.updateVolumeVizVisibilityThresholdBounds(true); // sets absolute threshold
+        this.setVolumeRenderingQuantileThreshold(19);
+        this.setVolumeRenderingUseQuantileOverAbsoluteThreshold(false);
+        this.setVolumeRenderingThresholdSign(1);
+    }
+
+    setVolumeVizUiLoaderVisibility(visible: boolean) {
+        this.htmlVolumeVizLoaderColumn.style.display = visible ? "flex" : "none";
+        this.htmlVolumeVizMainColumn.style.display = visible ? "none" : "flex";
+    }
+
+    getVolumeRenderingAbsoluteThresholdRange() {
+        return {
+            min: this.sliderUi.volumeVizThresholdSlider.options.range.min as number,
+            max: this.sliderUi.volumeVizThresholdSlider.options.range.max as number,
+        };
+    }
+
+    getVolumeRenderingThresholdSign() {
+        return this.context.rendering.getVolumeRenderingShaderThresholdSign();
+    }
+
+    getVolumeRenderingAbsoluteThreshold() {
+        return this.context.rendering.getVolumeRenderingAbsoluteThreshold();
+    }
+
+    getVolumeRenderingQuantileThresholdIndex() {
+        return this.context.rendering.getVolumeRenderingQuantileThreshold();
+    }
+
+    getVolumeRenderingQuantileThresholdValue() {
+        const quantileIndex = this.getVolumeRenderingQuantileThresholdIndex();
+        const quantileValue = quantileIndex < NON_EXTREME_QUANTILE_INDEX ? (quantileIndex + 1) * QUANTILE_STEP : 1 - (((NON_EXTREME_QUANTILE_INDEX * 2) - quantileIndex + 1) * QUANTILE_STEP);
+        return parseFloat(quantileValue.toFixed(QUANTILE_RELEVANT_DECIMALS));
+    }
+
+    getVolumeRenderingUseQuantileOverAbsoluteThreshold() {
+        return this.context.rendering.getVolumeRenderingUseQuantileOverAbsoluteThreshold();
+    }
+
+
+    toggleThresholdSliderAnimations(enabled: boolean) {
+        this.sliderUi.toggleThresholdSliderAnimations(enabled);
+    }
+
+    setVolumeRenderingThresholdSign(thresholdSign: number, updateUi: boolean = true) {
+        if (updateUi) {
+            // not applicable i guess
+        }
+        
+        this.sliderUi.updateVolumeVizThresholdSliderConnects(thresholdSign);
+        this.context.rendering.setVolumeRenderingShaderThresholdSign(thresholdSign);
+        this.sliderUi.updateSignVisual();
+        this.sliderUi.updateSlidersVisibility(this.getVolumeRenderingUseQuantileOverAbsoluteThreshold());
+        this.updateExtremeTypeText();
+    }
+
+    setVolumeRenderingAbsoluteThreshold(newThreshold: number, updateSliderUi: boolean = true) {
+        if (updateSliderUi) {
+            this.sliderUi.volumeVizThresholdSlider.set(newThreshold, false);
+        }
+        this.context.rendering.setVolumeRenderingShaderAbsoluteThreshold(newThreshold);
+        this.updateExtremeTypeText();
+    }
+
+    setVolumeRenderingRange(min: number | null, max: number | null, updateSliderUi: boolean = true) {
+        if (updateSliderUi) {
+            // this.sliderUi
+        }
+        
+        this.context.rendering.setVolumeRenderingShaderRange(min, max);
+        this.updateExtremeTypeText(); // todo
+    }
+
+    setVolumeRenderingQuantileThreshold(newQuantile: number, updateSliderUi: boolean = true) {
+        if (updateSliderUi) {
+            this.sliderUi.volumeVizQuantileSlider.set(newQuantile, false);
+        }
+        this.context.rendering.setVolumeRenderingShaderQuantileThreshold(newQuantile);
+        this.updateExtremeTypeText();
+    }
+
+    setVolumeRenderingUseQuantileOverAbsoluteThreshold(useQuantile: boolean, updateSliderUi: boolean = true) {
+        if (updateSliderUi) {
+            this.sliderUi.updateSlidersVisibility(this.currentExtremeType.thresholdType == ExtremeThresholdType.Quantile)
+            this.sliderUi.volumeVizThresholdSlider.updateOptions({}, false);
+        }
+        this.context.rendering.setVolumeRenderingShaderUseQuantileOverAbsoluteThreshold(useQuantile);
+        this.updateExtremeTypeText();
+    }
+
+    updateSlidersAndLabelsAfterChange(updateSliders: boolean = true, dimensionsOnly: Dimension[] = []) {
+        // this.context.log(`${performance.now()}: updateSlidersAndLabelsAfterChange called (updateSliders=${updateSliders},  dimensionsOnly=${dimensionsOnly})`);
         if (updateSliders) {
             this.updateSliderValuesAfterChange(dimensionsOnly);
         }
-        if (updateLabels) {
-            this.updateLabelsAfterChange();
-        }
+        this.updateLabelsAfterChange();
     }
 
     updateSliderValuesAfterChange(dimensionsOnly: Dimension[] = []) {
-        const zSelectionRange = this.cubeSelection.getSelectionRangeByDimension(Dimension.Z);
-        const ySelectionRange = this.cubeSelection.getSelectionRangeByDimension(Dimension.Y);
-        const xSelectionRange = this.cubeSelection.getSelectionRangeByDimension(Dimension.X);
-
-        const lonRange = this.cubeDimensions.xParameterRange;
-        const sliderOffset = this.cubeTags.includes(CubeTag.LongitudeZeroIndexIsGreenwich) ? this.roundUpToSparsity(lonRange.length() / 2) : 0;
-        const overflowBias = xSelectionRange.length() / lonRange.length() * 0.5; // magic value for good compromise between overflowing longitude slider value early and late
-        const overflowXIndex = Math.floor((xSelectionRange.min + sliderOffset) / this.cubeDimensions.x.steps + overflowBias);
-        if (overflowXIndex != this.lastOverflowXSliderIndex) {
-            const newMinimum = this.roundDownToSparsity(overflowXIndex * this.cubeDimensions.x.steps + lonRange.min + sliderOffset);
-            const newMaximum = this.roundDownToSparsity(overflowXIndex * this.cubeDimensions.x.steps + lonRange.max + sliderOffset - 1); 
-            this.xSelectionSlider.updateOptions({ range: { min: newMinimum, max: newMaximum } }, false);
-
-            this.lastOverflowXSliderIndex = overflowXIndex;
-
-            this.xSelectionSlider.off("update");
-            if (this.geospatialContextProvided) {
-                this.mergeSliderTooltips(this.xSliderDiv as any, 40, " - ");
-            }
-        }
-
-        if (dimensionsOnly.length == 0 || dimensionsOnly.includes(Dimension.Z)) {
-            this.zSelectionSlider.set([zSelectionRange.min, zSelectionRange.max - 1], false);
-        }
-        if (dimensionsOnly.length == 0 || dimensionsOnly.includes(Dimension.Y)) {
-            this.ySelectionSlider.set([ySelectionRange.min, ySelectionRange.max - 1], false);
-        }
-        if (dimensionsOnly.length == 0 || dimensionsOnly.includes(Dimension.X)) {
-            this.xSelectionSlider.set([xSelectionRange.min + sliderOffset * 2, xSelectionRange.max + sliderOffset * 2 - 1], false); // sliderOffset*2 is hacky, but works for the two data sets with zeroIndexIsGreenwich
-        }
+        this.sliderUi.updateSliderValuesAfterChange(dimensionsOnly);
     }
 
     updateLabelsAfterChange() {
@@ -3018,7 +2416,7 @@ class CubeInteraction {
             cornerLineBold(`${this.selectedParameterId}`);
         }
         if (!this.context.widgetMode) {
-            cornerLineSmall(`<div>When using Lexcube and/or generated images or videos, please acknowledge/cite: M. Söchting et al., doi: <a href="https://doi.org/10.1109/MCG.2023.3321989" target="blank" onclick="return true">10.1109/MCG.2023.3321989</a>.</div>`);
+            // cornerLineSmall(`<div>When using Lexcube and/or generated images or videos, please acknowledge/cite: M. Söchting et al., doi: <a href="https://doi.org/10.1109/MCG.2023.3321989" target="blank" onclick="return true">10.1109/MCG.2023.3321989</a>.</div>`);
         }
 
         let dialogHtml = "";
@@ -3085,13 +2483,14 @@ class CubeInteraction {
         if (showPopup) {
             this.datasetInfoDialogWrapperDiv.style.display = 'flex';
         }
+        this.disableAllLinksInOrchestrationMasterMode();
     }
 
     private parameterBeingSelected = false;
 
     selectParameter(parameterId: string, cubeChanged: boolean = false) {
         if (this.parameterBeingSelected || !this.cubeParameters.has(parameterId)) {
-            this.context.log("Did not select parameter", parameterId);
+            console.error("Could not select", parameterId);
             return false;
         }
         this.context.log("Select parameter", parameterId);
@@ -3106,6 +2505,7 @@ class CubeInteraction {
         if (this.cubeTags.includes(CubeTag.ColormappingFromObservedValues)) { // if using observed values for color mapping
             this.context.rendering.hideData();
         }
+        this.context.rendering.createTileTextureViews();
         this.htmlParameterSelect.value = parameterId;
         this.selectedParameterId = parameterId;
         this.selectedParameter = this.cubeParameters.get(parameterId)!;
@@ -3123,13 +2523,14 @@ class CubeInteraction {
             const rowSize = columns * cubeSize + (columns - 1) * spacing;
             const columnSize = rows * cubeSize + (rows - 1) * spacing;
             const position = new Vector3(0, -(-columnSize / 2 + pos.y * (cubeSize + spacing)), -(-rowSize / 2 + pos.x * (cubeSize + spacing)));
-            this.context.rendering.cube.position.copy(position);
+            this.context.rendering.tile2dFaceRenderedCube.position.copy(position);
         }
 
         this.context.tileData.resetDataStatistics();
+        this.context.tileData.resetTextureFiltering();
 
         this.cubeDimensions.setInitialParameterRanges(this.selectedParameter.parameterCoverageTime);
-        this.lastOverflowXSliderIndex = NaN;
+        this.sliderUi.resetOverflowXSliderIndex();
 
         this.currentZoomFactor = [1.0, 1.0, 1.0];
         this.previousZoomFactor = [1.0, 1.0, 1.0];
@@ -3141,35 +2542,58 @@ class CubeInteraction {
 
         this.reconstructAllZoomFactors();
         this.context.rendering.resetForNewParameter();
-        this.context.tileData.allocateTileStorages(cubeChanged);
+        this.context.tileData.setDataType(this.selectedParameter.dataType);
+        this.context.rendering.setDataType(this.selectedParameter.dataType);
+        this.context.tileData.allocateTile2dStorages(cubeChanged);
+        this.context.tileData.allocateTile3dStorages(cubeChanged);
         this.context.tileData.resetTileMaps();
         this.context.tileData.symmetricalColormapAroundZero = false;
-        // this.colormapAllTiles();
         this.updateDatasetInfoAndShow(true, false);
         this.fullyLoaded = true;
         this.context.rendering.updateRegionBorderPositionAndResolution();
 
+        this.resetTimeSeries();
         this.clearColormapRangeUi();
         
         if (!this.context.widgetMode) {
-            this.htmlColormapMinInputDiv.value = this.selectedParameter.fixedColormapMinimumValue !== undefined ? 
-                `${this.selectedParameter.fixedColormapMinimumValue}` :
-                (!this.cubeTags.includes(CubeTag.ColormappingFromObservedValues) ? `${this.selectedParameter.globalMinimumValue}` : "");
-            this.htmlColormapMaxInputDiv.value = this.selectedParameter.fixedColormapMaximumValue !== undefined ?
-                `${this.selectedParameter.fixedColormapMaximumValue}` :
-                (!this.cubeTags.includes(CubeTag.ColormappingFromObservedValues) ? `${this.selectedParameter.globalMaximumValue}` : "");
+            if (this.selectedParameter.fixedColormapMinimumValue !== undefined) {
+                this.colormapUi.setMinInputValue(`${this.selectedParameter.fixedColormapMinimumValue}`);
+            } else if (this.cubeTags.includes(CubeTag.ColormappingFromObservedValues)) {
+                this.colormapUi.setMinInputValue("");
+            } else {
+                const globalMin = this.selectedParameter.isAnomalyParameter() ? this.selectedParameter.minimumValue : this.selectedParameter.realisticMinimumValueViaQuantiles;
+                this.colormapUi.setMinInputValue(`${globalMin}`);
+            }
+
+            if (this.selectedParameter.fixedColormapMaximumValue !== undefined) {
+                this.colormapUi.setMaxInputValue(`${this.selectedParameter.fixedColormapMaximumValue}`);
+            } else if (this.cubeTags.includes(CubeTag.ColormappingFromObservedValues)) {
+                this.colormapUi.setMaxInputValue("");
+            } else {
+                const globalMax = this.selectedParameter.isAnomalyParameter() ? this.selectedParameter.maximumValue : this.selectedParameter.realisticMaximumValueViaQuantiles;
+                this.colormapUi.setMaxInputValue(`${globalMax}`);
+            }
         }
 
         this.context.tileData.ignoreStatisticalColormapBounds = false;
+        // if (this.context.rendering.volumeVizModeEnabled) {
+        //     this.context.tileData.symmetricalColormapAroundZero = true;
+        //     this.context.tileData.ignoreStatisticalColormapBounds = true;
+        //     const p = 10;
+        //     this.context.tileData.colormapMaxValueOverride = p;
+        //     this.context.tileData.colormapMinValueOverride = -p;
+        //     this.htmlColormapMinInputDiv.value = `-${p}`;
+        //     this.htmlColormapMaxInputDiv.value = `${p}`;
+        //     this.selectColormapByName("balance");
+        //     this.context.tileData.setColormapFlipped(this.selectedParameter.higherAnomalyIsBlueInsteadOfRed());
+        // } else
         if (this.selectedParameter.fixedColormap !== undefined) {
             const flipped = (this.selectedParameter.fixedColormapFlipped !== undefined && this.selectedParameter.fixedColormapFlipped)
-            this.htmlColormapFlippedCheckbox.checked = flipped
             this.context.tileData.setColormapFlipped(flipped);
             this.selectColormapByName(this.selectedParameter.fixedColormap);
         } else {
             // reset colormap flipped
             if (!this.context.widgetMode) {
-                this.htmlColormapFlippedCheckbox.checked = false
                 this.context.tileData.setColormapFlipped(false);
             }
 
@@ -3178,6 +2602,7 @@ class CubeInteraction {
                 this.context.tileData.symmetricalColormapAroundZero = true;
                 this.context.tileData.ignoreStatisticalColormapBounds = true;
                 this.selectColormapByName("balance");
+                this.context.tileData.setColormapFlipped(this.selectedParameter.higherAnomalyIsBlueInsteadOfRed())
             } else {
                 if (this.context.widgetMode) {
                     this.context.log("Not selecting new colormap on selectParameter (widget mode)")
@@ -3186,6 +2611,9 @@ class CubeInteraction {
                 }
             }
         }
+        this.colormapUi.setFlippedChecked(this.context.tileData.getColormapFlipped());
+        this.setVolumeVizUiLoaderVisibility(true);
+        this.resetExtremeEventTypeAndUi();
         this.context.rendering.updateVisibilityAndLods();
         if (!this.context.widgetMode) {
             this.updateColormapOverrideRangesFromUi();
@@ -3194,14 +2622,23 @@ class CubeInteraction {
         
         this.animationParameters = new AnimationParameters(Dimension.Z, this.cubeDimensions, this.selectedCubeMetadata.sparsity, this.updateAnimationDurationLabel.bind(this));
         this.animationParameters.initialize();
-        this.htmlAnimationSelectedRangeOnlyCheckbox.checked = false;
+        this.animationUi.setSelectedRangeOnlyChecked(false);
         this.updateAnimationSliders();
         this.updateAnimationDimensionSelectLabels();
         this.cubeSelection.updateSelectionRelevantUi();
         this.updateLabelPositions();
 
+        this.resetVolumeVizVisibilityThresholdBoundsForNewParameter();
+
+
         this.parameterBeingSelected = false;
         this.initialLoad = false;
+
+        // window.setTimeout(() => {
+            
+        // this.enableVolumeVisualization(); // debuging
+        // }, 500);
+
         return true;
     }
 
@@ -3219,12 +2656,22 @@ class CubeInteraction {
         this.selectedCube = logicalDataCube;
         const meta = await this.context.networking.fetch(`/api/datasets/${logicalDataCube.id}`);
         this.selectedCubeMetadata = meta;
+
+        if (this.selectedCubeMetadata.max_lod_2d > MAXIMUM_SUPPORTED_LOD) {
+            this.context.warn("Selected cube has a maximum LOD of", this.selectedCubeMetadata.max_lod_2d, "which is higher than the maximum client supported LOD of", MAXIMUM_SUPPORTED_LOD, " - will clamp to", MAXIMUM_SUPPORTED_LOD);
+        }
+        
+        if (this.selectedCube.id.indexOf("anomalies") > -1) {
+            this.cubeTags.push(CubeTag.AnomaliesOnly);
+        }
+
         ParameterRange.sparsity = this.selectedCubeMetadata.sparsity;
         this.cubeParameters = new Map<string, Parameter>();
+        const isAnomalyDataset = this.cubeTags.includes(CubeTag.AnomaliesOnly);
         for (let parameterId of Object.keys(meta["data_vars"])) {
             const parameterAttributionLookupId = parameterId.endsWith(ANOMALY_PARAMETER_ID_SUFFIX) ? parameterId.substring(0, parameterId.length - ANOMALY_PARAMETER_ID_SUFFIX.length) : parameterId;
             const attribution = this.getAttributionParameterMetadata(parameterAttributionLookupId);
-            const parameter = new Parameter(parameterId, this.selectedCubeMetadata.data_vars[parameterId], attribution, this.getColormapParameterMetadata(parameterId));
+            const parameter = new Parameter(parameterId, this.selectedCubeMetadata.data_vars[parameterId], attribution, this.getColormapParameterMetadata(parameterId), isAnomalyDataset);
             this.cubeParameters.set(parameterId, parameter);
         }
 
@@ -3330,23 +2777,44 @@ class CubeInteraction {
         this.context.log("Cube tags:", this.cubeTags.map(a => CubeTag[a]));
         this.updateAvailableParametersUi();
 
+        if (!this.context.widgetMode) {
+            this.htmlDownloadDatasetSubsetButton.style.display = this.selectedCubeMetadata.allow_data_downloads ? "block" : "none";
+        }
+        this.updateVolumeVizAvailability(this.selectedCubeMetadata.enable_3d_tiles);
+
         this.updateSliderLabels();
 
-        this.htmlAnimationDimensionSelect.value = "z";
+        this.animationUi.setDimensionSelectValue("z");
+
+        const firstParameter = this.cubeParameters.get(Array.from(this.cubeParameters.keys())[0])!.name;
 
         if (this.initialLoad && this.initialSelectionState.parameterId && this.parseInitialParameter()) {
             // parameter will be selected as side effect of parseInitialParameter
-        } else if (this.cubeTags.includes(CubeTag.ESDC)) {
-            this.selectParameter("air_temperature_2m", true);
+
+        } else if (esdc3) {
+            if (this.context.orchestrationMasterMode) {
+                this.selectParameter("precipitation_era5", true);
+            } else {
+                if (!this.selectParameter("air_temperature_2m", true)) {
+                    this.selectParameter(firstParameter, true);
+                }
+            }
         } else if (this.cubeTags.includes(CubeTag.CamsEac4Reanalysis)) {
             this.selectParameter("aod550", true);
         } else {
-            this.selectParameter(this.cubeParameters.get(Array.from(this.cubeParameters.keys())[0])!.name, true);
+            this.selectParameter(firstParameter, true);
         }
         if (!this.context.widgetMode) {
             this.updateUrlFragment();
         }
         this.context.log("done selecting cube and parameter, cubeselection:", this.cubeSelection)
+    }
+
+    updateVolumeVizAvailability(serverHasEnabled3dTiles: boolean) {
+        this.context.log(`Volume viz (3D tiles on server) is ${serverHasEnabled3dTiles ? "available" : "not available"} for this dataset`);
+        this.volumeVizAvailable = serverHasEnabled3dTiles;
+        this.htmlEnableVolumeVizButton.style.display = this.volumeVizAvailable ? "block" : "none";
+        this.disableVolumeVisualization();
     }
 
     private parseInitialParameter() {
@@ -3357,33 +2825,18 @@ class CubeInteraction {
         return false;
     }
 
-    applyCameraPreset(presetName: string = "", cameraOverride: PerspectiveCamera | OrthographicCamera | undefined = undefined, presetOverride: { position: { x: number, y: number, z: number }; rotation: { x: number, y: number, z: number } } | undefined = undefined, fromWidgetMode: boolean = false): void {
+    applyCameraPreset(presetName: string = "", cameraOverride: OrthographicCamera | undefined = undefined, presetOverride: { position: { x: number, y: number, z: number }; rotation: { x: number, y: number, z: number } } | undefined = undefined, fromWidgetMode: boolean = false): void {        
         const defaultPresetIndex = 3;
         let presetIndex = this.context.scriptedMultiViewMode ? 5 : defaultPresetIndex;
-        const urlPreset = document.URL.match(/camera=(\w+)/);
-        if (presetName.length > 0) {
+        if (this.context.singleFaceMode) {
+            presetIndex = this.cameraPresets.findIndex(c => c.name == `Single Face (${CubeFace[this.context.singleFace]})`)
+        } else if (presetName.length > 0) {
             presetIndex = this.cameraPresets.findIndex(c => c.name == presetName);
-        } else if (urlPreset && urlPreset.length > 0) {
-            presetIndex = this.cameraPresets.findIndex(c => c.name == `Single Face (${urlPreset[1]})`)
-        }
-        const c = presetOverride || this.cameraPresets[presetIndex];
-        this.context.log("Applying camera preset", "name" in c ? c.name : `custom preset (${JSON.stringify(c)})`);
-
-        let position = new Vector3(c.position.x, c.position.y, c.position.z);
-        const rotation = new Euler(c.rotation.x, c.rotation.y, c.rotation.z);
-        const camera = cameraOverride || this.context.rendering.mainCamera;
-        if (presetIndex == defaultPresetIndex && !this.context.rendering.printTemplateDownloading && !this.context.isometricMode && !presetOverride) {
-            this.context.rendering.adjustCameraPresetToCube(position);
-        }
-        camera.rotation.copy(rotation);
-        camera.position.copy(position);
-        camera.zoom = 1;
-        camera.updateMatrixWorld();
-        camera.updateProjectionMatrix();
-        if (!this.context.rendering.printTemplateDownloading) {
-            this.orbitControls.update(fromWidgetMode);
-        }
-        this.context.rendering.requestRender();
+        } 
+        const overridingPreset = (presetOverride ? { "name": `custom preset (${JSON.stringify(presetOverride)})`, "position": new Vector3(presetOverride.position.x, presetOverride.position.y, presetOverride.position.z), "rotation": new Euler(presetOverride.rotation.x, presetOverride.rotation.y, presetOverride.rotation.z) } : undefined);
+        const c = overridingPreset || this.cameraPresets[presetIndex];
+        this.context.log("Applying camera preset", c.name, "presetIndex:", presetIndex, "fromWidgetMode:", fromWidgetMode);
+        this.context.rendering.applyCameraPreset(c, (presetIndex == defaultPresetIndex && !presetOverride), cameraOverride, fromWidgetMode);
     }
 
     selectCubeById(cube_id: string) {
@@ -3418,7 +2871,8 @@ class CubeInteraction {
     private async retrieveMetaData() {
         const status = await this.context.networking.fetch(`/api`);
         if (status["api_version"] != API_VERSION) {
-            return console.error("Wrong API version on server");
+            window.alert("Error: Wrong API version on server");
+            throw new Error("Wrong API version on server");
         }
         this.availableCubes = await this.context.networking.fetch(`/api/datasets`);
         this.context.log("Available cubes: ", this.availableCubes);
@@ -3465,6 +2919,9 @@ class CubeInteraction {
     }
 
     private updateUrlFragment() {
+        if (!this.selectedCube || !this.selectedParameter) {
+            return;
+        }
         let query = decodeURIComponent(document.location.search);
         if (query.indexOf(this.urlFragmentStartSymbol) > -1) {
             query = query.substring(0, query.indexOf(this.urlFragmentStartSymbol));
@@ -3472,9 +2929,9 @@ class CubeInteraction {
         const hash = this.urlFragmentStartSymbol + [
             this.selectedCube.id.toLowerCase(), 
             this.selectedParameterId.toLowerCase(), 
-            this.cubeSelection.getSelectionRangeByDimension(Dimension.Z).toString(0, true), 
-            this.cubeSelection.getSelectionRangeByDimension(Dimension.Y).toString(0, true), 
-            this.cubeSelection.getSelectionRangeByDimension(Dimension.X).toString(0, true)
+            this.cubeSelection.getSelectionRangeByDimension(Dimension.Z).toString(true), 
+            this.cubeSelection.getSelectionRangeByDimension(Dimension.Y).toString(true), 
+            this.cubeSelection.getSelectionRangeByDimension(Dimension.X).toString(true)
         ].join(this.urlFragmentSplitSymbol);
         history.replaceState({}, "", query.length > 1 ? query + hash : "?" + hash);
     }
@@ -3541,210 +2998,55 @@ class CubeInteraction {
 
     updateDisplaySignificance() {
         const td = this.context.tileData;
-        const n = 3 - Math.log10(this.selectedParameter.getConvertedDataValue(td.observedMaxValue) - this.selectedParameter.getConvertedDataValue(td.observedMinValue));
+        const min = this.selectedParameter.getConvertedDataValue(td.statisticalColormapLowerBound);
+        const max = this.selectedParameter.getConvertedDataValue(td.statisticalColormapUpperBound);
+        if (min == max) {
+            return;
+        }
+        const n = 3 - Math.log10(max - min);
         if (isNaN(n)) {
             return;
         }
-        const newSignificance = clamp(Math.round(n), 2, 32);
+        const newSignificance = clamp(Math.round(n), 0, 7);
         if (newSignificance != this.floatDisplaySignificance) {
             // console.log(`New Display significance: ${newSignificance} (previously: ${floatDisplaySignificance})`)
             this.floatDisplaySignificance = newSignificance;
             this.updateColormapRangePlaceholders();
-            this.updateHoverInfoUi();
+            this.updateHoverInfoUi(false);
         }
-    }
-
-    private initializeColormapScale() {
-        const canvas = document.createElement("canvas");
-        canvas.width = this.colormapScaleWidth;
-        canvas.height = this.colormapScaleHeight;
-        this.colormapScaleCanvasContext = canvas.getContext("2d")!;
-        this.htmlColormapScaleGradient.appendChild(canvas);
+        this.context.log(`Updating display significance:${n} ${newSignificance}, observed range (via statistical colormap bounds since min/max might be heavily skewed by outliers): ${td.statisticalColormapLowerBound} - ${td.statisticalColormapUpperBound}, min: ${this.selectedParameter.getConvertedDataValue(td.statisticalColormapLowerBound)}, max: ${this.selectedParameter.getConvertedDataValue(td.statisticalColormapUpperBound)}`);
     }
 
     convertColormapDataToRGB8(source: number[][]) {
-        const data: number[][] = JSON.parse(JSON.stringify(source));
-
-        // double the amount of points by linearly interpolating --> increases colormap accuracy slightly
-        const count = data.length;
-        for (let i = 0; i < count - 1; i++) {
-            const p0 = source[i];
-            const p1 = source[i + 1];
-            const p = [(p0[0] + p1[0]) / 2, (p0[1] + p1[1]) / 2, (p0[2] + p1[2]) / 2];
-            data.splice(i * 2 + 1, 0, p);
-        }
-
-        for (let i = 0; i < data.length; i++) {
-            data[i][0] = clamp(Math.round(data[i][0] * 255), 0, 255);
-            data[i][1] = clamp(Math.round(data[i][1] * 255), 0, 255);
-            data[i][2] = clamp(Math.round(data[i][2] * 255), 0, 255);
-        }
-        return data;
+        return this.colormapUi.convertDataToRGB8(source);
     }
 
     getColormapDataFromName(name: string) {
-        const category = Object.keys(defaultColormaps).find(c => Object.keys((defaultColormaps as any)[c]).includes(name))!;
-        const source = (defaultColormaps as any)[category][name] as number[][];
-        return this.convertColormapDataToRGB8(source);
-    }
-
-    private updateColormapScale(data: number[][]) {
-        const gradient = this.colormapScaleCanvasContext.createLinearGradient(0, 0, this.colormapScaleWidth, 0);
-        for (let i = 0; i < data.length; i++) {
-            const p = i / (data.length - 1);
-            const c = data[i];
-            gradient.addColorStop(p, `rgb(${c[0]}, ${c[1]}, ${c[2]})`);
-        }
-        this.colormapScaleCanvasContext.fillStyle = gradient;
-        this.colormapScaleCanvasContext.fillRect(0, 0, this.colormapScaleWidth, this.colormapScaleHeight);
+        return this.colormapUi.getDataFromName(name);
     }
 
     updateColormapScaleFlip(flipped: boolean) {
-        this.htmlColormapScaleGradient.style.scale = `${flipped ? "-1" : "1"} 1`
+        this.colormapUi.updateScaleFlip(flipped);
     }
 
     updateColormapScaleTexts(minValue: number, maxValue: number) {
-        const count = this.htmlColormapScaleTexts.length;
-        this.htmlColormapScaleUnitText.innerHTML = `${this.selectedParameter.getUnitHTML()}`;
-        for (let i = 0; i < count; i++) {
-            const p = i / (count - 1);
-            this.htmlColormapScaleTexts[i].textContent = `${this.toFixed(this.selectedParameter.getConvertedDataValue(p * (maxValue - minValue) + minValue))}`;
-        }
-    }
-
-    private initializeColormapUi() {
-        const gradientResolution = 200;
-        const canvas = document.createElement("canvas");
-        canvas.height = 1;
-        canvas.width = gradientResolution;
-        const canvasContext = canvas.getContext("2d")!;
-
-        const colormapCategories = new Map<string, string>([
-            ["Sequential", "Sequential"],
-            ["PerceptuallyUniformSequential", "Perceptually Uniform Sequential"],
-            ["Diverging", "Diverging"],
-            ["Crameri", "Scientific Colormaps (by Fabio Crameri)"],
-            ["cmocean", "cmocean"],
-            ["Proplot", "ProPlot"],
-            ["Cyclic", "Cyclic"],
-            ["Miscellaneous", "Miscellaneous"],
-        ]);
-        for (let category of colormapCategories.keys()) {
-            const categoryName = colormapCategories.get(category)!;
-            const colormapCategoryHeader = document.createElement("div");
-            colormapCategoryHeader.innerText = `► ${categoryName}`;
-            colormapCategoryHeader.style.cursor = "pointer";
-            colormapCategoryHeader.style.fontWeight = "bold";
-            this.htmlColormapButtonList.appendChild(colormapCategoryHeader);
-
-            const colormapCategoryContainer = document.createElement("div");
-            colormapCategoryContainer.classList.add("colormap-category");
-            colormapCategoryContainer.style.display = 'none';
-            colormapCategoryContainer.style.maxHeight = "180px";
-            colormapCategoryContainer.style.overflowY = "auto";
-            this.htmlColormapButtonList.appendChild(colormapCategoryContainer);
-            
-            colormapCategoryHeader.setAttribute("collapsed", "true");
-
-            colormapCategoryHeader.onclick = () => {
-                if (colormapCategoryHeader.getAttribute("collapsed") == "true") {
-                    colormapCategoryHeader.textContent = `▼ ${categoryName}`;
-                    colormapCategoryContainer.style.display = 'block';
-                    colormapCategoryHeader.setAttribute("collapsed", "false");
-                    for (let otherCategoryHeader of this.htmlColormapButtonList.children) {
-                        if (otherCategoryHeader != colormapCategoryHeader) {
-                            if (otherCategoryHeader.getAttribute("collapsed") == "false") {
-                                (otherCategoryHeader as any).onclick();
-                            }
-                        }
-                    }
-                    colormapCategoryHeader.scrollIntoView({ block: this.context.widgetMode ? "nearest" : "center" });
-                } else {
-                    colormapCategoryHeader.textContent = `► ${categoryName}`;
-                    colormapCategoryContainer.style.display = 'none';
-                    colormapCategoryHeader.setAttribute("collapsed", "true");
-                }
-            }
-
-            const colormapNames = Object.keys((defaultColormaps as any)[category]);
-            for (let j = 0; j < colormapNames.length; j++) {
-                const name = colormapNames[j];
-                const data = this.getColormapDataFromName(name);
-
-                const button = document.createElement("button");
-                const gradient = canvasContext.createLinearGradient(0, 0, gradientResolution, 0);
-
-                for (let i = 0; i < data.length; i++) {
-                    const p = i / (data.length - 1);
-                    const c = data[i];
-                    gradient.addColorStop(p, `rgb(${c[0]}, ${c[1]}, ${c[2]})`);
-                }
-
-                canvasContext.fillStyle = gradient;
-                canvasContext.fillRect(0, 0, canvas.width, canvas.height);
-
-                button.textContent = name;
-
-                let img_b64 = canvas.toDataURL('image/png');
-                button.style.backgroundImage = `url(${img_b64})`
-                button.onclick = () => { this.selectColormapByName(name); }
-                button.title = name;
-                colormapCategoryContainer.appendChild(button);
-            }
-        }
+        this.colormapUi.updateScaleTexts(minValue, maxValue);
     }
 
     private selectArbitraryLinearColormap(parameterIndex: number) {
-        const names = ["viridian", "algae", "deep", "dense", "haline", "ice", "speed", "tempo", "turbid"]
-        this.selectColormapByName(names[parameterIndex % names.length]);
+        this.colormapUi.selectArbitraryLinear(parameterIndex);
     }
 
     deselectColormapInUi() {
-        const selected = "selected";
-        for (let i = 0; i < this.htmlColormapButtonList.children.length; i++) {
-            const category = this.htmlColormapButtonList.children[i] as HTMLElement;
-            for (let element of category.children) {
-                element.classList.remove(selected);
-            }
-        }
+        this.colormapUi.deselectInUi();
     }
 
     selectColormapByName(name: string) {
-        const category = Object.keys(defaultColormaps).find(c => Object.keys((defaultColormaps as any)[c]).includes(name))!;
-        if (!category) {
-            console.error("Cannot find colormap", name);
-            return false;
-        }
-        this.selectedColormapCategory = category;
-
-        this.selectedColormapName = name;
-        this.context.log("selectColormapByName", name, this.selectedColormapCategory);
-
-        const selected = "selected";
-        for (let i = 0; i < this.htmlColormapButtonList.children.length; i++) {
-            const category = this.htmlColormapButtonList.children[i] as HTMLElement;
-            for (let element of category.children) {
-                if (name == (element as HTMLElement).title) {
-                    element.classList.add(selected);
-                } else {
-                    element.classList.remove(selected);
-                }
-            }
-        }
-        this.updateColormapScale(this.getColormapDataFromName(name));
-        if (this.context.widgetMode) {
-            this.updateWidgetColormap(name);
-        }
-        this.context.tileData.selectColormapByName(name);
-        return true;
+        return this.colormapUi.selectByName(name);
     }
 
     selectColormapByData(data: number[][]) {
-        this.selectedColormapName = "Custom Colormap";
-        this.selectedColormapCategory = "Custom";
-        this.updateColormapScale(data);
-        this.context.tileData.selectColormapByData(data);
-        return true;
+        return this.colormapUi.selectByData(data);
     }
 
     private getDisplaySizeBounds(face: CubeFace) {
@@ -3767,8 +3069,8 @@ class CubeInteraction {
         }
         const displaySizeBounds = this.getDisplaySizeBounds(face);
         const newDisplaySize = displaySizeBounds.maxDisplaySize.clone();
-        const oldDisplaySize = this.cubeSelection.getSizeVector(face).clone();
-        const oldDisplayOffset = this.cubeSelection.getOffsetVector(face).clone();
+        const oldDisplaySize = this.cubeSelection.getDisplaySizeVector2d(face).clone();
+        const oldDisplayOffset = this.cubeSelection.getDisplayOffsetVector2d(face).clone();
         const newDisplayOffset = oldDisplayOffset.clone();
 
         // per 200 zoomDelta, halve visible dimensions
@@ -3837,8 +3139,8 @@ class CubeInteraction {
             this.interactionFinishDisplaySize = newDisplaySize;
             this.interactionFinishDisplayOffset = newDisplayOffset;
         }
-
-        this.triggerMaxRangeIndicatorsFromOffsetIfTouchEdges(face, this.cubeSelection.getOffsetVector(face), this.cubeSelection.getSizeVector(face));
+        
+        this.triggerMaxRangeIndicatorsFromOffsetIfTouchEdges(face, this.cubeSelection.getDisplayOffsetVector2d(face), this.cubeSelection.getDisplaySizeVector2d(face));
     }
 
     private triggerMaxRangeIndicatorsFromSizeIfNecessary(face: CubeFace, unclampedNewDisplaySize: Vector2, maxDisplaySize: Vector2) {
@@ -3863,19 +3165,26 @@ class CubeInteraction {
         // 1/8th of the currently shown cube need to be scrolled to trigger the indicator
         const xScrolledOutsideSignificantly = xScrolledOutside > (displaySize.x / 8.0);
         const yScrolledOutsideSignificantly = yScrolledOutSide > (displaySize.y / 8.0);
+
+        let anyTriggered = false;
         
         if (xScrolledOutsideSignificantly && unclampedNewDisplayOffset.x < minimumDisplayOffset.x && !xOverflowEnabled) {
             this.context.rendering.showMaxRangeIndicator(face, Dimension.X, true);
+            anyTriggered = true;
         }
         if (yScrolledOutsideSignificantly && unclampedNewDisplayOffset.y < minimumDisplayOffset.y) {
             this.context.rendering.showMaxRangeIndicator(face, Dimension.Y, true);
+            anyTriggered = true;
         }
         if (xScrolledOutsideSignificantly && unclampedNewDisplayOffset.x > maximumDisplayOffset.x && !xOverflowEnabled) {
             this.context.rendering.showMaxRangeIndicator(face, Dimension.X, false);
+            anyTriggered = true;
         }
         if (yScrolledOutsideSignificantly && unclampedNewDisplayOffset.y > maximumDisplayOffset.y) {
             this.context.rendering.showMaxRangeIndicator(face, Dimension.Y, false);
+            anyTriggered = true;
         }
+        return anyTriggered;
     }
 
     private triggerMaxRangeIndicatorsFromOffsetIfTouchEdges(face: CubeFace, clampedNewDisplayOffset: Vector2, displaySize: Vector2) {
@@ -3911,7 +3220,7 @@ class CubeInteraction {
 
     reconstructZoomFactor(face: CubeFace, onlyAssignIfDifferent: boolean = false) {
         const maxDisplaySize = this.getDisplaySizeBounds(face).maxDisplaySize;
-        const displaySize = this.cubeSelection.getSizeVector(face).clone().divide(maxDisplaySize);
+        const displaySize = this.cubeSelection.getDisplaySizeVector2d(face).clone().divide(maxDisplaySize);
 
         const newZoomFactor = clamp(1.0 - Math.log2(Math.min(displaySize.x, displaySize.y)), 1.0, MAX_ZOOM_FACTOR);
         const zoomFactorDifference = Math.abs(newZoomFactor - this.currentZoomFactor[Math.floor(face / 2)]);
@@ -3958,28 +3267,31 @@ class CubeInteraction {
         return result;
     }
 
-    getVisibleTiles() {
-        const tiles: Tile[] = [];
+    getVisibleTiles2d(singleFaceOnly: number = -1) {
+        const tiles: Tile2D[] = [];
         for (let face = 0; face < 6; face++) {
+            if (singleFaceOnly >= 0 && face != singleFaceOnly) {
+                continue;
+            }
             const visible = this.context.rendering.faceVisibility[face];
             if (!visible) { // maybe instead prioritize by visibility?
                 continue;
             }
-            const lod = this.context.rendering.lods[face];
+            const lod = this.context.rendering.lods2d[face];
 
-            const lodTileSize = TILE_SIZE * Math.pow(2, lod);
+            const lodTileSize = TILE_SIZE_2D * Math.pow(2, lod);
             let xValues: number[] = [];
 
             const width = this.cubeDimensions.totalWidthForFace(face);
             const maxX = Math.ceil(width / lodTileSize) - 1;
 
-            const offset = this.cubeSelection.getOffsetVector(face).clone();
-            const size = this.cubeSelection.getSizeVector(face).clone();
+            const offset = this.cubeSelection.getDisplayOffsetVector2d(face).clone();
+            const size = this.cubeSelection.getDisplaySizeVector2d(face).clone();
             const minVisibleY = Math.floor(offset.y / lodTileSize);
             const maxVisibleY = Math.floor((offset.y + size.y - 1) / lodTileSize);
             const minVisibleX = Math.floor(positiveModulo(offset.x, width) / lodTileSize);
             const maxVisibleX = Math.floor((positiveModulo(offset.x + size.x - 1, width)) / lodTileSize);
-            const xOverflown = Math.floor(offset.x / width) < Math.floor((offset.x + size.x) / width);
+            const xOverflown = minVisibleX > maxVisibleX;
             if ((face == CubeFace.Front || face == CubeFace.Back || face == CubeFace.Top || face == CubeFace.Bottom) && (xOverflown)) {
                 xValues = range(minVisibleX, maxX).concat(range(0, maxVisibleX))
             } else {
@@ -3988,27 +3300,73 @@ class CubeInteraction {
 
             for (let x of xValues) {
                 for (let y = minVisibleY; y <= maxVisibleY; y++) {
-                    const iv = this.cubeSelection.getIndexValueForFace(face);
+                    const iv = this.cubeSelection.getGuaranteedSparsityValidIndexValueForFace(face);
                     if (iv % this.selectedCubeMetadata.sparsity != 0) {
                         continue; // bandaid fix for when non-sparsity-rounded index values appear during interaction while animating
                     }
-                    tiles.push(new Tile(face, iv, lod, x, y, this.selectedCube.id, this.selectedParameterId));
+                    tiles.push(new Tile2D(face, iv, lod, x, y, this.selectedCube.id, this.selectedParameterId));
                 }
             }
         }
         return tiles;
     }
+    
+    getVisibleTiles3d() {
+        const tiles: Tile3D[] = [];
+        const lod = this.context.rendering.lod3d;
+        
+        // const key = "(indexValue), lodValue, tileX, tileY"
+        const lodAdjustedTileSize = TILE_SIZE_3D * Math.pow(2, lod);
+        let xValues: number[] = [];
 
-    async triggerTileDownloads() {
+        const xRange = this.cubeDimensions.x.steps;
+        const offset = this.cubeSelection.getDisplayOffsetVector3d();
+        const size = this.cubeSelection.getDisplaySizeVector3d();
+        const maxX = Math.ceil(xRange / lodAdjustedTileSize) - 1;
+
+        const minVisibleZ = Math.floor(offset.z / lodAdjustedTileSize);
+        const maxVisibleZ = Math.floor((offset.z + size.z - 1) / lodAdjustedTileSize);        
+        const minVisibleY = Math.floor(offset.y / lodAdjustedTileSize);
+        const maxVisibleY = Math.floor((offset.y + size.y - 1) / lodAdjustedTileSize);
+        const minVisibleX = Math.floor(positiveModulo(offset.x, xRange) / lodAdjustedTileSize);
+        const maxVisibleX = Math.floor(positiveModulo(offset.x + size.x - 1, xRange) / lodAdjustedTileSize);
+
+        const xOverflown = minVisibleX > maxVisibleX;
+
+        // console.log("xoverflown", xOverflown, minVisibleX, maxVisibleX, offset.x, size.x, xRange);
+        if (xOverflown) {
+            xValues = range(minVisibleX, maxX).concat(range(0, maxVisibleX))
+        } else {
+            xValues = range(minVisibleX, maxVisibleX);
+        }
+
+        for (let x of xValues) {
+            for (let y = minVisibleY; y <= maxVisibleY; y++) {
+                for (let z = minVisibleZ; z <= maxVisibleZ; z++) {
+                    tiles.push(new Tile3D(lod, x, y, z, this.selectedCube.id, this.selectedParameterId));
+                }
+            }
+        }
+
+        return tiles;
+    }
+
+    async triggerTileDownloads2d(singleFaceOnly: number = -1) {
         for (let face = 0; face < 6; face++) {
-            const newIndexValue = this.cubeSelection.getIndexValueForFace(face);
+            if (singleFaceOnly >= 0 && face != singleFaceOnly) {
+                continue;
+            }
+            const newIndexValue = this.cubeSelection.getGuaranteedSparsityValidIndexValueForFace(face);
             if (this.lastIndexValue[face] != newIndexValue) {
-                this.context.tileData.resetTileDownloadMapsForFace(face);
+                this.context.tileData.resetTile2dDownloadMapsForFace(face);
                 this.lastIndexValue[face] = newIndexValue;
             }
         }
-        const visibleTiles = this.getVisibleTiles();
-        const tilesToDownload = visibleTiles.filter(t => !this.context.tileData.isTileDownloadTriggered(t));
+        const visibleTiles = this.getVisibleTiles2d(singleFaceOnly);
+        this.context.rendering.visibleTiles2dChanged(visibleTiles); // since it potentially updates TTVs, can influence tileDownloadsTriggered
+
+        const tilesToDownload = visibleTiles.filter(t => !this.context.tileData.isTileDownloadTriggered(t) && this.context.rendering.tileContainedInTileTextureView2d(t));
+
         if (tilesToDownload.length > 0) {
             this.context.networking.downloadTiles(tilesToDownload);
         }
@@ -4020,15 +3378,43 @@ class CubeInteraction {
         }
         // this.context.log(`Triggered ${tilesToDownload.length} tile downloads`)
 
+        if (singleFaceOnly >= 0) {
+            return;
+        }
         const finishedTiles = visibleTiles.filter(t => this.context.tileData.isTileDownloadFinished(t))
         const faces = this.getVisibleFaces();
         for (let face of faces) {
             if (finishedTiles.filter(t => t.face == face).length == visibleTiles.filter(t => t.face == face).length) {
-                // exceptional LoD refresh for when all tiles are already downloaded (also: maybe LoD has not changed but it's okay)
-                this.context.rendering.revealLodForFace(face);
+                // exceptional early LoD reveal for when all tiles are already downloaded (also: maybe LoD has not changed but it's okay)
+                this.context.rendering.revealLod2dForFace(face);
             }
         }
     }
+
+    async triggerTileDownloads3d(tiles: Tile3D[] | null = null) {
+        const visibleTiles = this.getVisibleTiles3d();
+        this.context.rendering.visibleTiles3dChanged(visibleTiles); // since it potentially updates TTVs, can influence tileDownloadsTriggered
+        
+        const tilesToDownload = tiles || visibleTiles.filter(t => !this.context.tileData.isTileDownloadTriggered(t));
+
+        if (tilesToDownload.length > 0) {
+            tilesToDownload.forEach(t => this.context.tileData.setTileDownloadTriggered(t));
+            this.context.networking.downloadTiles(tilesToDownload);
+        }
+
+        if (tilesToDownload.length == 0) {
+            this.context.rendering.setAllTilesDownloaded();
+        } else {
+            this.renderedAfterAllTilesDownloaded = false;
+        }
+        
+        const finishedTiles = visibleTiles.filter(t => this.context.tileData.isTileDownloadFinished(t))
+        if (finishedTiles.length == visibleTiles.length) {
+            // exceptional LoD refresh for when all tiles are already downloaded (also: maybe LoD has not changed but it's okay)
+            this.context.rendering.revealLod3d();
+        }
+    }
+    
 
     private parseEuropeanDate(dateString: string): Date { // Parses DD.MM.YYYY
         const split = dateString.split(/(\-|\.|\/)/);
@@ -4059,6 +3445,7 @@ class CubeInteraction {
         if (this.context.rendering.printTemplateDownloading) {
             this.context.rendering.processNextFaceForPrintTemplate();
         }
+        this.hideResolutionChangeInfo(); // not sure if best place
     }
     
     private async attemptNextAnimationStep(firstFrame: boolean = false) {
@@ -4093,7 +3480,7 @@ class CubeInteraction {
         this.animationLastStepTime = performance.now();
         const range = this.animationParameters.getAnimationRangeFromStep();
         this.cubeSelection.setRange(this.animationParameters.getDimension(), range.min, range.max);
-        this.updateSlidersAndLabelsAfterChange(true, true, [ this.animationParameters.getDimension() ]);
+        this.cubeSelection.updateSelectionRelevantUi(true, true, [ this.animationParameters.getDimension() ]);
         this.context.rendering.updateVisibilityAndLods();
         if (this.isMouseHoveringOverCube) {
             this.updateHoverInfo();
@@ -4140,7 +3527,9 @@ class CubeInteraction {
             svg = svg.replace("Link to your cube:", "");
             svg = svg.replace("qrcode.png", "");
         } else {
-            const qr = await QRCode.toDataURL(document.URL, { color: { dark: "#000", light: "#ffffff00" } });
+            // force lexcube.org URL for QR codes if run on localhost; assuming the data set exists there :)
+            const qrUrl = window.location.hostname == "localhost" ? `https://www.lexcube.org/?!${document.URL.substring(document.URL.indexOf("!") + 1)}` : document.URL;
+            const qr = await QRCode.toDataURL(qrUrl, { color: { dark: "#000", light: "#ffffff00" } });
             svg = svg.replace("qrcode.png", qr);
         }
         let datasetName = this.selectedCube.shortName;
@@ -4224,6 +3613,25 @@ class CubeInteraction {
         }
     }
 
+    showResolutionChangeInfo(lod: number) {
+        const isNewLodAlreadyAllocated = this.context.tileData.isTexture3dAllocated(lod);
+        const resolutionText = `${Math.round(100 * Math.pow(0.5, lod))}% data resolution`;
+        const allocatedSoFar = this.context.tileData.getActual3dStorageSizeOfLodInBytes();
+        const nowAllocating = this.context.tileData.getTheoretical3dStorageSizeOfLodInBytes(lod);
+        const totalBytesCpu = (allocatedSoFar.cpuSideBytes + (isNewLodAlreadyAllocated ? 0 : nowAllocating.cpuSideBytes)) / (1024 * 1024);
+        const totalBytesGpu = (allocatedSoFar.gpuSideBytes + (isNewLodAlreadyAllocated ? 0 : nowAllocating.gpuSideBytes)) / (1024 * 1024);
+        this.htmlVolumeVizStatsRow.innerText = `Shown: ${resolutionText} - RAM: ${totalBytesCpu.toFixed(0)} MB / VRAM: ${totalBytesGpu.toFixed(0)} MB (${this.context.tileData.get3dStorageType()})`;
+        if (!isNewLodAlreadyAllocated) {
+            // this.resolutionChangeHeadingDiv.innerText = `Allocating 3D vo`;
+            // this.resolutionChangeLabelDiv.innerText = `Allocating ${newMBallocated.toFixed(0)} MB...`;
+            // this.resolutionChangePopupDiv.style.display = "flex";
+        }
+    }
+
+    hideResolutionChangeInfo() {
+        this.resolutionChangePopupDiv.style.display = "none";
+    }
+
     showConnectionLostAlert() {
         this.connectionLostMessageVisible = true;
         this.updateStatusMessage();
@@ -4235,44 +3643,129 @@ class CubeInteraction {
     }
 
     private setAnimationUseSelectedRangeOnly() {
-        this.animationParameters.setUseSelectedRange(this.htmlAnimationSelectedRangeOnlyCheckbox.checked);
+        this.animationParameters.setUseSelectedRange(this.animationUi.isSelectedRangeOnlyChecked());
         this.updateAnimationSliders();
     }
-    
+
     updateAnimationSelectedRangeOnlyLabel() {
         if (this.animationEnabled) {
             return;
         }
         const d = this.animationParameters.getDimension();
-        const cd = this.cubeDimensions.getCubeDimensionByDimension(d);
         const range = this.cubeSelection.getSelectionRangeByDimension(d);
-        const p1 = cd.getIndexString(range.min);
-        const p2 = cd.getIndexString(range.max - 1);
         this.animationParameters.updateSelectedRange(range);
-        if (this.htmlAnimationSelectedRangeOnlyCheckbox.checked) {
+        if (this.animationUi.isSelectedRangeOnlyChecked()) {
             this.updateAnimationSliders();
         }
-        this.htmlAnimationSelectedRangeOnlyCheckboxLabelDiv.innerHTML = ` Only animate last selection (${p1} - ${p2})`;
+        this.animationUi.updateSelectedRangeOnlyLabel();
     }
 
     private updateAnimationDimension(dimension: Dimension) {
         this.animationEnabled = false;
         this.stopAnimation();
-        this.htmlAnimationSelectedRangeOnlyCheckbox.checked = false;
+        this.animationUi.setSelectedRangeOnlyChecked(false);
         this.animationParameters.updateDimension(dimension, this.cubeDimensions);
         this.updateAnimationSelectedRangeOnlyLabel();
         this.updateAnimationSliders();
     }
 
     private updateAnimationDimensionSelectLabels() {
-        this.htmlAnimationDimensionSelect.options[0].text = this.cubeDimensions.x.getName();
-        this.htmlAnimationDimensionSelect.options[1].text = this.cubeDimensions.y.getName();
-        this.htmlAnimationDimensionSelect.options[2].text = this.cubeDimensions.z.getName();
+        this.animationUi.updateDimensionSelectLabels();
     }
 
     isCurrentCubeZeroIndexGreenwich() {
         return this.cubeTags.includes(CubeTag.LongitudeZeroIndexIsGreenwich);
     }
+
+    updateControlsCamera(camera: Camera) {
+        this.orbitControls.camera = camera;
+        this.orbitControls.update();
+    }
+
+    updateControls(reconstructTarget: boolean = false) {
+        this.orbitControls.update(reconstructTarget);
+    }
+
+    getMaxLod3d() {
+        return Math.min(this.selectedCubeMetadata.max_lod_3d, MAXIMUM_SUPPORTED_LOD);
+    }
+
+    getMaxLod2d() {
+        let requestedMaxLod = this.selectedCubeMetadata.max_lod_2d;
+        if (!requestedMaxLod) {
+            const largestDim = this.cubeDimensions.totalSize().clone().toArray().reduce((a, b) => Math.max(a, b), 0);
+            const calculatedMaxLod = Math.max(Math.floor(Math.log2(largestDim / TILE_SIZE_2D)), 0);
+            this.selectedCubeMetadata.max_lod_2d = calculatedMaxLod;
+            requestedMaxLod = calculatedMaxLod;
+            console.warn("Cube metadata missing max_lod_2d, setting to", requestedMaxLod, "based on largest dimension size", largestDim);
+        }
+        return Math.min(requestedMaxLod, MAXIMUM_SUPPORTED_LOD);
+    }
+
+    
+    receiveEventData(metadata: any, buffer: ArrayBuffer) {
+        console.log("Received event data with metadata", metadata, "and buffer of byte length", buffer.byteLength);
+        // buffer has N events, each event has the following structure:
+            // # start_index (in time) uint16
+            // # end_index (in time)uint16
+            // # min_x_index uint16
+            // # max_x_index uint16
+            // # min_y_index uint16
+            // # max_y_index uint16
+            // # n_observations uint32
+        const eventSize = 2 + 2 + 2 + 2 + 2 + 2 + 4 + 4; // in bytes
+        const nEvents = buffer.byteLength / eventSize;
+        const dataView = new DataView(buffer);
+        const events: ExtremeEvent[] = [];
+        for (let i = 0; i < nEvents; i++) {
+            if (i > 100) {
+                break;
+            }
+            const event = ExtremeEvent.fromDataView(i + 1, dataView, i * eventSize);
+            events.push(event);
+        }
+        console.log("Received", events.length, "events", events);
+        this.htmlVolumeVizEventTableBody.innerHTML = "";
+        let html = ``;
+        for (let event of events) {
+            html += event.toTableRow(this.cubeDimensions);
+        }
+        this.htmlVolumeVizEventTableBody.innerHTML = html;
+        this.htmlVolumeVizEventExploreLink.textContent = `Explore ${events.length} events >`;
+    }
+
+}
+
+class ExtremeEvent {
+    constructor(public eventIndex: number, public startIndex: number, public endIndex: number, public minXIndex: number, public maxXIndex: number, public minYIndex: number, public maxYIndex: number, public areaKm2: number, public nObservations: number) {}
+
+    static fromDataView(eventIndex: number, dataView: DataView, offset: number): ExtremeEvent {
+        const startIndex = dataView.getUint16(offset, true);
+        const endIndex = dataView.getUint16(offset + 2, true);
+        const minXIndex = dataView.getUint16(offset + 4, true);
+        const maxXIndex = dataView.getUint16(offset + 6, true);
+        const minYIndex = dataView.getUint16(offset + 8, true);
+        const maxYIndex = dataView.getUint16(offset + 10, true);
+        const areaKm2 = dataView.getUint32(offset + 12, true);
+        const nObservations = dataView.getUint32(offset + 16, true);
+        return new ExtremeEvent(eventIndex, startIndex, endIndex, minXIndex, maxXIndex, minYIndex, maxYIndex, areaKm2, nObservations);
+    }
+
+    toTableRow(cubeDimensions: CubeDimensions): string {
+        const firstTimeIndex = cubeDimensions.z.getIndexString(this.startIndex);
+        const lastTimeIndex = cubeDimensions.z.getIndexString(this.endIndex);
+        const durationString = cubeDimensions.z.getDifferenceString(this.endIndex - this.startIndex + 1).differenceString;
+        // const timeRangeString = firstTimeIndex == lastTimeIndex ? firstTimeIndex : `${firstTimeIndex} /<br>${lastTimeIndex}`;
+        const timeRangeString = `${firstTimeIndex}<br>+ ca. ${durationString}`;
+        const spaceCoverageString = `${(this.areaKm2 / 1000).toFixed(0)}k km²<br>(${this.maxXIndex - this.minXIndex + 1}×${this.maxYIndex - this.minYIndex + 1})`;
+        const centerXYString = `${cubeDimensions.x.getIndexString(Math.floor((this.minXIndex + this.maxXIndex) / 2))} / ${cubeDimensions.y.getIndexString(Math.floor((this.minYIndex + this.maxYIndex) / 2))}`;  
+        return `<tr><td>#${this.eventIndex}</td><td>${this.nObservations} obs</td><td>${timeRangeString}</td><td>${spaceCoverageString}</td><td>${centerXYString}</td></tr>`;
+    }
 }
 
 export { CubeInteraction }
+// Re-export from core modules for backward compatibility
+export { CubeDimension, CubeDimensions, CubeDimensionType, CubeTag, GeospatialContext, GeospatialContextCorrection, GeospatialRange, ParameterRange } from './core/dimensions';
+export { Parameter, ParameterAttributionMetadata, ParameterColormapMetadata } from './core/parameters';
+export { CubeSelection, SelectionState } from './core/selection';
+export { AnimationParameters } from './core/animation';

@@ -16,7 +16,7 @@
     along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
-import { DeviceOrientation } from './constants';
+import { CubeFace, DeviceOrientation } from './constants';
 import { CubeInteraction } from './interaction';
 import { Networking } from './networking';
 import { CubeRendering } from './rendering';
@@ -38,12 +38,16 @@ class CubeClientContext {
     scriptedMode: boolean = false;
     orchestrationMinionMode: boolean = false;
     orchestrationMasterMode: boolean = false;
+    singleFaceMode: boolean = false;
+    singleFace: CubeFace = CubeFace.Front;
     noUiMode: boolean = false;
     scriptedMultiViewMode: boolean = false;
     textureFilteringEnabled: boolean = false;
-    cubeScale: number[] = [1, 1, 1];
+    useHalfFloatsForTile3d: boolean = true;
+    lowPerformanceDeviceMode: boolean = false;
+    cubeScale: number[] = [1.0, 1.0, 1.0];
 
-    screenOrientation: DeviceOrientation = (screen.orientation ? (screen.orientation.type.indexOf("landscape") > -1 ? DeviceOrientation.Landscape : DeviceOrientation.Portrait) : (window.innerHeight > window.innerWidth ? DeviceOrientation.Portrait : DeviceOrientation.Landscape));
+    screenOrientation: DeviceOrientation = DeviceOrientation.Landscape;
     screenAspectRatio: number = window.screen.width / window.screen.height;
 
     widgetMode: boolean = false;
@@ -52,10 +56,16 @@ class CubeClientContext {
     touchDevice = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0);
     widgetPostStartup: () => void = () => {};
 
-    constructor(widgetMode: boolean = false, htmlParent: HTMLElement = document.body, isometricMode: boolean = false, cubeScale: number[] | undefined = undefined) {
+    constructor(widgetMode: boolean = false, htmlParent: HTMLElement = document.body, isometricMode: boolean = false, cubeScale: number[] | undefined = undefined, forceFloat32For3dTiles: boolean = false) {
         this.widgetMode = widgetMode;
         this.isometricMode = isometricMode; 
         this.cubeScale = cubeScale || this.cubeScale;
+        this.useHalfFloatsForTile3d = !forceFloat32For3dTiles;
+
+        this.updateScreenOrientation();
+        window.addEventListener('resize', () => {
+            this.updateScreenOrientation();
+        });
 
         if (!widgetMode) {
             this.isometricMode = this.isometricMode || document.URL.indexOf("isometric") > 0;
@@ -68,6 +78,13 @@ class CubeClientContext {
             this.noUiMode = document.URL.indexOf("noUi") > 0;
             this.scriptedMultiViewMode = document.URL.indexOf("scriptedMultiView") > 0;
             this.textureFilteringEnabled = document.URL.indexOf("textureFiltering") > 0;
+            this.useHalfFloatsForTile3d = document.URL.indexOf("forceFloat32") <= 0;
+            this.lowPerformanceDeviceMode = this.isClientPortrait();
+            this.singleFaceMode = document.URL.indexOf("singleFace=") > 0;
+            if (this.singleFaceMode) {
+                const face = document.URL.match(/singleFace=(\w+)/);
+                this.singleFace = face ? CubeFace[face[1] as keyof typeof CubeFace] : CubeFace.Front;
+            }
         }
 
         this.rendering = new CubeRendering(this, htmlParent);
@@ -91,15 +108,22 @@ class CubeClientContext {
             } else {
                 window.alert(featureCheck.message);
                 document.getElementById("tutorial-wrapper")!.style.display = "none";
-                document.getElementById("status-message")!.innerHTML = "LexCube failed to start.<br>Please retry on a more modern browser/device."
+                document.getElementById("status-message")!.innerHTML = "Lexcube failed to start.<br>Please retry on a more modern browser/device."
             }
-        }        
+        }
     }
 
     isClientPortrait() {
         return this.screenOrientation == DeviceOrientation.Portrait;
     }
 
+    updateScreenOrientation() {
+        if (window.innerHeight > window.innerWidth) {
+            this.screenOrientation = DeviceOrientation.Portrait;
+        } else {
+            this.screenOrientation = DeviceOrientation.Landscape;
+        }
+    }
 
     checkWebAssembly() {
         try {
@@ -120,23 +144,23 @@ class CubeClientContext {
         if (!document.createElement('canvas').getContext('webgl2')) {
             if (navigator.userAgent.indexOf("AppleWebKit") > -1) {
                 if (navigator.userAgent.indexOf("iPhone") > -1) {
-                    message = "WebGL2 needs to be enabled to run LexCube. You can enable it in iOS 12+ at: 'Settings' > 'General' > 'Safari' > 'Advanced' > 'Experimental Features' > 'WebGL 2.0'";
+                    message = "WebGL2 needs to be enabled to run Lexcube. You can enable it in iOS 12+ at: 'Settings' > 'General' > 'Safari' > 'Advanced' > 'Experimental Features' > 'WebGL 2.0'";
                 } else {
-                    message = "WebGL2 needs to be enabled to run LexCube. You can enable it at: 'Develop' > 'Experimental Features' > 'WebGL 2.0'. If you don't see the Develop menu, choose 'Safari' > 'Preferences' > 'Advanced' > 'Show Develop menu in menu bar'.";
+                    message = "WebGL2 needs to be enabled to run Lexcube. You can enable it at: 'Develop' > 'Experimental Features' > 'WebGL 2.0'. If you don't see the Develop menu, choose 'Safari' > 'Preferences' > 'Advanced' > 'Show Develop menu in menu bar'.";
                 }
             } else if (typeof WebGL2RenderingContext !== 'undefined') {
-                message = "Your browser supports WebGL2 but it might be disabled. Please enable it or use a more modern browser/device to access LexCube.";
+                message = "Your browser supports WebGL2 but it might be disabled. Please enable it or use a more modern browser/device to access Lexcube.";
             } else {
-                message = "Your browser does not support WebGL2, which is a requirement for LexCube. Please use a more modern browser/device to access LexCube.";
+                message = "Your browser does not support WebGL2, which is a requirement for Lexcube. Please use a more modern browser/device to access Lexcube.";
             }
             success = false;
         }
         if (!window.WebSocket) {
-            message = "Your browser does not support Websockets, which is a requirement for LexCube. Please use a more modern browser/device to access LexCube.";
+            message = "Your browser does not support Websockets, which is a requirement for Lexcube. Please use a more modern browser/device to access Lexcube.";
             success = false;
         }
         if (!this.checkWebAssembly()) {
-            message = "Your browser does not support WebAssembly, which is a requirement for LexCube. Please use a more modern browser/device to access LexCube.";
+            message = "Your browser does not support WebAssembly, which is a requirement for Lexcube. Please use a more modern browser/device to access Lexcube.";
             success = false;
         }
         return { success: success, message: message };
@@ -153,6 +177,12 @@ class CubeClientContext {
     log(...params: any[]) {
         if (this.debugMode || this.expertMode) {
             console.log(...params);
+        }
+    }
+
+    warn(...params: any[]) {
+        if (this.debugMode || this.expertMode) {
+            console.warn(...params);
         }
     }
 }

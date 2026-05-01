@@ -3,9 +3,28 @@ const version = require('./package.json').version;
 
 // Custom webpack rules
 const rules = [
-  { test: /\.ts$/, loader: 'ts-loader' },
+  { test: /\.ts$/, loader: 'ts-loader'  },
   { test: /\.js$/, loader: 'source-map-loader' },
-  { test: /\.(gif|jpe?g|png|svg|mp4)$/, loader: 'file-loader'},
+  {
+    test: /\.svg$/i,
+    resourceQuery: /raw/,
+    type: 'asset/source'
+  },
+  {
+    test: /\.(gif|jpe?g|png|svg|mp4|glb|gltf)$/,
+    resourceQuery: { not: [/raw/] },
+    type: 'asset/resource'
+  },
+  {
+    // numcodecs references zfp_codec.wasm via new URL(..., import.meta.url).
+    // Keep the URL string at runtime instead of forcing webpack to resolve the file at build time.
+    test: /numcodecs[\\/]zfp_codec-[^\\/]+\.js$/,
+    parser: {
+      javascript: {
+        url: false
+      }
+    }
+  },
   { test: /\.html$/, loader: 'raw-loader'},
   { test: /\.css$/, use: ['style-loader', 'css-loader']}
 ];
@@ -15,8 +34,17 @@ const externals = ['@jupyter-widgets/base'];
 
 const resolve = {
   // Add '.ts' and '.tsx' as resolvable extensions.
-  extensions: [".webpack.js", ".web.js", ".ts", ".js"]
+  extensions: [".webpack.js", ".web.js", ".ts", ".js"],
+  alias: {
+    // JupyterLab builder bundles from lib/, but binary assets live in src/.
+    './pin.glb$': path.resolve(__dirname, 'src', 'lexcube-client', 'src', 'client', 'pin.glb'),
+    // Compiled JS references a TS worker extension; remap to emitted JS worker.
+    './geojson-loader.worker.ts$': path.resolve(__dirname, 'lib', 'lexcube-client', 'src', 'client', 'rendering', 'geojson-loader.worker.js'),
+    // Optional codec binary not present in pinned numcodecs tarball.
+    'zfp_codec.wasm$': false,
+  }
 };
+
 
 module.exports = [
   /**
