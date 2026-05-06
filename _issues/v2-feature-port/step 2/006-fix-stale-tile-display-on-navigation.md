@@ -18,7 +18,7 @@ Commit `e577a1e` ("fix 3D qube renders old/incorrect data when generation is run
 2. **Client clears stale tiles** - `clearTilesForDownload()` (tiledata.ts:924) fills tile storage with `NOT_LOADED_REPLACEMENT_VALUE` (-99999.0), replacing old pixel data immediately.
 3. **Shader renders checkerboard** - Fragment shader (rendering.ts:1444) detects the sentinel value and shows a checkerboard pattern instead of stale data or the colormap.
 
-The trigger chain: server detects external fetch → emits `tile_request_info` → client calls `clearTilesForDownload()` → shader shows checkerboard → new tiles arrive → shader shows real data.
+The trigger chain: server detects external fetch -> emits `tile_request_info` -> client calls `clearTilesForDownload()` -> shader shows checkerboard -> new tiles arrive -> shader shows real data.
 
 ### V2 Complication
 
@@ -40,7 +40,7 @@ The stale data fix needs to be rethought for V2's architecture. Simply porting t
 
 V2's current tile display lifecycle on view change:
 
-1. User pans/zooms/changes dimension → `triggerTileDownloads()` (interaction.ts:5066)
+1. User pans/zooms/changes dimension -> `triggerTileDownloads()` (interaction.ts:5066)
 2. Download tracking maps are cleared (`resetTileDownloadMapsForFace`)
 3. New tile requests are sent
 4. **BUT: the actual tile data in `tileStoragesFloat` is NOT cleared** - old pixel values remain in GPU memory
@@ -58,8 +58,8 @@ V2 has `clearTilesForDownload()` (tiledata.ts:924) which fills tile ranges with 
 
 - V2's `clearTilesForDownload()` exists and works for 2D tiles - verify it covers all changed tiles on view change
 - Determine if V2's 3D voxel rendering (volume-rendering.ts) has the same stale data problem and how to reset 3D textures
-- Tile2D uses `tileStoragesFloat` arrays → cleared by filling with `NOT_LOADED_REPLACEMENT_VALUE`
-- Tile3D uses separate 3D textures → need to find equivalent reset mechanism
+- Tile2D uses `tileStoragesFloat` arrays -> cleared by filling with `NOT_LOADED_REPLACEMENT_VALUE`
+- Tile3D uses separate 3D textures -> need to find equivalent reset mechanism
 - Check if clearing on every small pan is too aggressive (performance - avoid clearing tiles that are still valid)
 - Propose a V2-adapted solution that handles both 2D face rendering AND 3D voxel rendering
 

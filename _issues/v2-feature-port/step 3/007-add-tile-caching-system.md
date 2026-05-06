@@ -23,7 +23,7 @@ Add configurable tile caching as a core system for both Jupyter widget mode and 
 - Handles BOTH Tile2D and Tile3D (keep V2's separate classes - do NOT unify)
 - Cache key includes tile_format (ZFP/BLOSC_LZ4/VLQ) - same tile at same LOD produces different bytes per format
 - Methods: `tile_exists()`, `read_tile()`, `write_tile()`, `get_cache_size_bytes()`, `_can_write()`
-- Atomic write: `.tmp` → `os.rename()` (prevents corruption on crash/cancel)
+- Atomic write: `.tmp` -> `os.rename()` (prevents corruption on crash/cancel)
 - Disk full: try/except, log warning, continue without caching
 
 ### 3. Widget Mode Config Plumbing (`cube3d.py`, `lexcube_widget.py`)
@@ -36,15 +36,15 @@ Add configurable tile caching as a core system for both Jupyter widget mode and 
 
 - Extend `handle_tile_request_widget()`:
     - "memory": current behavior (tile_memory_cache only)
-    - "disk": memory cache → disk cache → generate → write disk → write memory → serve
+    - "disk": memory cache -> disk cache -> generate -> write disk -> write memory -> serve
     - "none": generate every time
 
 ### 5. Integrate into Standalone Handler (`tile_server.py`)
 
 - Extend `handle_tile_request_standalone()`:
-    - Block file exists → serve from block (preserve current behavior)
-    - Block missing + caching → check disk cache → generate → cache → serve
-    - Block missing + no caching → graceful error
+    - Block file exists -> serve from block (preserve current behavior)
+    - Block missing + caching -> check disk cache -> generate -> cache -> serve
+    - Block missing + no caching -> graceful error
 
 ## Architecture Constraints
 
@@ -71,15 +71,15 @@ Add configurable tile caching as a core system for both Jupyter widget mode and 
 
 ## Acceptance
 
-- Config: `enabledCachingStrategies: ["tile"]` + `maxCacheGb: 2.0` → `caching_enabled() == True`
-- Config: no caching fields → `caching_enabled() == False` (backward compat)
-- Config: invalid strategy → `ValueError`
-- Tile2D: write → read roundtrip returns identical bytes
-- Tile3D: write → read roundtrip returns identical bytes
-- Same tile + different tile_format → different cache entries
+- Config: `enabledCachingStrategies: ["tile"]` + `maxCacheGb: 2.0` -> `caching_enabled() == True`
+- Config: no caching fields -> `caching_enabled() == False` (backward compat)
+- Config: invalid strategy -> `ValueError`
+- Tile2D: write -> read roundtrip returns identical bytes
+- Tile3D: write -> read roundtrip returns identical bytes
+- Same tile + different tile_format -> different cache entries
 - Widget default mode: existing behavior unchanged
 - Widget disk mode: first request generates + caches, second request serves from cache
-- Standalone: block exists → served from block; block missing + cache → generated + cached
+- Standalone: block exists -> served from block; block missing + cache -> generated + cached
 - `Cube3DWidget(np.zeros((10,10,10)))` still works unchanged
 
 ## Reference

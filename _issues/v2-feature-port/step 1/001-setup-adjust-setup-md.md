@@ -15,9 +15,9 @@ Clone SETUP.md from feature branch and adjust for V2. After this, a developer ca
 - Create branch `feature-port-to-v2` from `main` (first issue - branch must exist)
 - Clone `SETUP.md` from `merge-v2` branch
 - Adjust all build commands for V2:
-    - Webpack → Vite (`npm run dev` uses Vite, `npm run build` uses `vite build`)
-    - TypeScript 4.9 → 5.9, Three.js 0.144 → 0.182
-    - numcodecs 0.2.5 → 0.2.8
+    - Webpack -> Vite (`npm run dev` uses Vite, `npm run build` uses `vite build`)
+    - TypeScript 4.9 -> 5.9, Three.js 0.144 -> 0.182
+    - numcodecs 0.2.5 -> 0.2.8
 - Adjust Python instructions for V2 deps (zarr 3.x, numpy 2.4.x)
 - Add standalone server section (reference issues 002-007)
 - Remove any webpack/v1-specific instructions

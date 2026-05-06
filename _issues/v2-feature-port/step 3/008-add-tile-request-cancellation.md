@@ -18,7 +18,7 @@ Add tile request cancellation so the server stops generating tiles for a previou
 - Add `_foreground_request_started()` / `_foreground_request_finished()` / `_foreground_requests_active()`
 - Add `handle_cancel_tile_requests(data)` async method
 - Add `shutdown()` method for graceful cleanup
-- Cancel pattern: after generating each tile in a batch, check flag → if set, stop and return partial results
+- Cancel pattern: after generating each tile in a batch, check flag -> if set, stop and return partial results
 
 ### Client-side (`networking.ts` + `interaction.ts`)
 

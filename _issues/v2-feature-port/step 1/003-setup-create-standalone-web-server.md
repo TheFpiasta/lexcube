@@ -21,9 +21,9 @@ Create `lexcube/lexcube_server/src/lexcube_standalone.py`:
 - **socket.io** AsyncServer wrapped with ASGI
 - **REST routes**: `GET /api` (status + API_VERSION 6), `GET /api/datasets` (list), `GET /api/datasets/{id}` (detail)
 - **Socket.io events**:
-    - `request_tile_data` → `handle_tile_request_standalone()`
-    - `request_tile_data_multiple` → batch handler (V2's client sends this)
-    - `request_event_data` → `handle_event_request_standalone()`
+    - `request_tile_data` -> `handle_tile_request_standalone()`
+    - `request_tile_data_multiple` -> batch handler (V2's client sends this)
+    - `request_event_data` -> `handle_event_request_standalone()`
 - **GeoJSON serving**: mount geojson dir at root, auto-download from Natural Earth if missing (with timeout + graceful fallback)
 - **Error handling**: try/except on ALL socket.io and REST handlers - one bad request must never crash the server
 - **Graceful shutdown**: signal handlers (SIGINT, SIGTERM)
@@ -44,11 +44,11 @@ Create `lexcube/lexcube_server/src/lexcube_standalone.py`:
 ## Acceptance
 
 - `python lexcube/lexcube_server/src/lexcube_standalone.py` starts with valid config
-- `curl http://localhost:5000/api` → `{"status": "ok", "api_version": 6}`
-- `curl http://localhost:5000/api/datasets` → JSON array
+- `curl http://localhost:5000/api` -> `{"status": "ok", "api_version": 6}`
+- `curl http://localhost:5000/api/datasets` -> JSON array
 - GeoJSON served at root path
-- Malformed request → error logged, server stays up
-- SIGINT → graceful shutdown
+- Malformed request -> error logged, server stays up
+- SIGINT -> graceful shutdown
 
 ## Reference
 
