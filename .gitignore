@@ -174,3 +174,4 @@ lexcube/labextension
 
 # Jupyter notebooks created in project root
 /*.ipynb
+/.sisyphus/
