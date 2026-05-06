@@ -1,6 +1,6 @@
-# 007 — Add Tile Caching System
+# 007 - Add Tile Caching System
 
-**Step**: 3 — Features
+**Step**: 3 - Features
 **Type**: Feature
 **Priority**: High
 **Branch**: `feature-port-to-v2`
@@ -8,7 +8,7 @@
 
 ## Goal
 
-Add configurable tile caching as a core system for both Jupyter widget mode and standalone web mode. After this, tiles are cached on first generation and served from cache on revisit — no re-fetching data sources or re-computing.
+Add configurable tile caching as a core system for both Jupyter widget mode and standalone web mode. After this, tiles are cached on first generation and served from cache on revisit - no re-fetching data sources or re-computing.
 
 ## What To Do
 
@@ -20,8 +20,8 @@ Add configurable tile caching as a core system for both Jupyter widget mode and 
 
 ### 2. TileDiskCache Class (`tile_server.py`)
 
-- Handles BOTH Tile2D and Tile3D (keep V2's separate classes — do NOT unify)
-- Cache key includes tile_format (ZFP/BLOSC_LZ4/VLQ) — same tile at same LOD produces different bytes per format
+- Handles BOTH Tile2D and Tile3D (keep V2's separate classes - do NOT unify)
+- Cache key includes tile_format (ZFP/BLOSC_LZ4/VLQ) - same tile at same LOD produces different bytes per format
 - Methods: `tile_exists()`, `read_tile()`, `write_tile()`, `get_cache_size_bytes()`, `_can_write()`
 - Atomic write: `.tmp` → `os.rename()` (prevents corruption on crash/cancel)
 - Disk full: try/except, log warning, continue without caching
@@ -30,7 +30,7 @@ Add configurable tile caching as a core system for both Jupyter widget mode and 
 
 - Add `Cube3DWidget` constructor params: `caching_mode` ("memory"/"disk"/"none", default "memory"), `cache_directory`, `max_cache_gb`
 - Pass through to `TileServer` via `lexcube_widget.py`
-- Backward compatible — existing code works unchanged
+- Backward compatible - existing code works unchanged
 
 ### 4. Integrate into Widget Handler (`tile_server.py`)
 
@@ -50,7 +50,7 @@ Add configurable tile caching as a core system for both Jupyter widget mode and 
 
 - **MUST** keep Tile2D and Tile3D as separate classes (V2 architecture)
 - **MUST** use `current_output_tile_format: str` API (NOT `compress_lossless: bool`)
-- **MUST NOT** implement cross-LOD cache derivation (never compute LOD N from cached LOD M — compounding lossy artifacts)
+- **MUST NOT** implement cross-LOD cache derivation (never compute LOD N from cached LOD M - compounding lossy artifacts)
 - **MUST NOT** implement standalone chunk caching (rejected in prior analysis)
 - **MUST NOT** add LRU eviction (future improvement)
 - **MUST NOT** copy merge-v2 code verbatim (incompatible Tile class hierarchy)
@@ -92,4 +92,4 @@ Add configurable tile caching as a core system for both Jupyter widget mode and 
 - V2 standalone handler: `main:tile_server.py:1849-1888`
 - V2 cube3d.py: `main:lexcube/cube3d.py`
 - V2 lexcube_widget.py: `main:lexcube/lexcube_server/src/lexcube_widget.py`
-- Feature branch caching: `merge-v2:tile_server.py:317-354, 818-880, 1426-1570` (design reference — incompatible types)
+- Feature branch caching: `merge-v2:tile_server.py:317-354, 818-880, 1426-1570` (design reference - incompatible types)

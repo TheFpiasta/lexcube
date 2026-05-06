@@ -1,6 +1,6 @@
-# 003 — Create Standalone Web Server
+# 003 - Create Standalone Web Server
 
-**Step**: 1 — Setup
+**Step**: 1 - Setup
 **Type**: Setup / Infrastructure
 **Priority**: High
 **Branch**: `feature-port-to-v2`
@@ -9,7 +9,7 @@
 
 ## Goal
 
-Create the web server process that bridges the client to V2's TileServer. Without this, the web app cannot run. V2 already has `startup_standalone()`, `handle_tile_request_standalone()`, and `handle_event_request_standalone()` — this wires them to HTTP/WebSocket endpoints.
+Create the web server process that bridges the client to V2's TileServer. Without this, the web app cannot run. V2 already has `startup_standalone()`, `handle_tile_request_standalone()`, and `handle_event_request_standalone()` - this wires them to HTTP/WebSocket endpoints.
 
 This is the basic server. Features like caching (issue 006) and cancel (issue 007) will adjust the server later.
 
@@ -25,7 +25,7 @@ Create `lexcube/lexcube_server/src/lexcube_standalone.py`:
     - `request_tile_data_multiple` → batch handler (V2's client sends this)
     - `request_event_data` → `handle_event_request_standalone()`
 - **GeoJSON serving**: mount geojson dir at root, auto-download from Natural Earth if missing (with timeout + graceful fallback)
-- **Error handling**: try/except on ALL socket.io and REST handlers — one bad request must never crash the server
+- **Error handling**: try/except on ALL socket.io and REST handlers - one bad request must never crash the server
 - **Graceful shutdown**: signal handlers (SIGINT, SIGTERM)
 - **uvicorn** runner on port 5000
 - API metadata includes V2 fields: `max_lod_2d`, `max_lod_3d`, `enable_3d_tiles`
@@ -34,7 +34,7 @@ Create `lexcube/lexcube_server/src/lexcube_standalone.py`:
 
 - **MUST NOT** add authentication or authorization
 - **MUST NOT** add APIs beyond /api, /api/datasets, /api/datasets/:id
-- **MUST NOT** silently swallow errors — all exceptions logged
+- **MUST NOT** silently swallow errors - all exceptions logged
 - Caching and cancel hooks will be added by later issues (006, 007)
 
 ## Files Changed

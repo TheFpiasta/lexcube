@@ -1,6 +1,6 @@
-# 002 — Add Standalone Server Infrastructure Files
+# 002 - Add Standalone Server Infrastructure Files
 
-**Step**: 1 — Setup
+**Step**: 1 - Setup
 **Type**: Setup
 **Priority**: High
 **Branch**: `feature-port-to-v2`

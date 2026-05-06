@@ -1,6 +1,6 @@
-# 005 — Fix Colormap Name "viridian" → "viridis"
+# 005 - Fix Colormap Name "viridian" → "viridis"
 
-**Step**: 2 — Fixes
+**Step**: 2 - Fixes
 **Type**: Bug Fix
 **Priority**: Medium
 **Branch**: `feature-port-to-v2`

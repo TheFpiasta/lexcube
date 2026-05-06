@@ -1,6 +1,6 @@
-# 004 — Fix np.Infinity for Python 3.13+ Compatibility
+# 004 - Fix np.Infinity for Python 3.13+ Compatibility
 
-**Step**: 2 — Fixes
+**Step**: 2 - Fixes
 **Type**: Bug Fix
 **Priority**: High
 **Branch**: `feature-port-to-v2`

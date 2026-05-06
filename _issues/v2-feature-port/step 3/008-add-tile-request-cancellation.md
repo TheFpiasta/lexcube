@@ -1,6 +1,6 @@
-# 008 — Add Tile Request Cancellation
+# 008 - Add Tile Request Cancellation
 
-**Step**: 3 — Features
+**Step**: 3 - Features
 **Type**: Feature
 **Priority**: Medium
 **Branch**: `feature-port-to-v2`
@@ -47,7 +47,7 @@ Add tile request cancellation so the server stops generating tiles for a previou
 
 ## Future Improvement (NOT this issue)
 
-Immediate mid-computation abort — interrupt in-progress data fetch/tile generation when it becomes irrelevant.
+Immediate mid-computation abort - interrupt in-progress data fetch/tile generation when it becomes irrelevant.
 
 ## Reference
 

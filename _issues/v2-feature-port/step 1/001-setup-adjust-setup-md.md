@@ -1,6 +1,6 @@
-# 001 — Adjust SETUP.md for V2
+# 001 - Adjust SETUP.md for V2
 
-**Step**: 1 — Setup
+**Step**: 1 - Setup
 **Type**: Setup / Documentation
 **Priority**: High
 **Branch**: `feature-port-to-v2` (create from `main` if not existing)
@@ -12,7 +12,7 @@ Clone SETUP.md from feature branch and adjust for V2. After this, a developer ca
 
 ## What To Do
 
-- Create branch `feature-port-to-v2` from `main` (first issue — branch must exist)
+- Create branch `feature-port-to-v2` from `main` (first issue - branch must exist)
 - Clone `SETUP.md` from `merge-v2` branch
 - Adjust all build commands for V2:
     - Webpack → Vite (`npm run dev` uses Vite, `npm run build` uses `vite build`)
@@ -24,7 +24,7 @@ Clone SETUP.md from feature branch and adjust for V2. After this, a developer ca
 
 ## Files Changed
 
-- `SETUP.md` (new — cloned + adjusted from `merge-v2:SETUP.md`)
+- `SETUP.md` (new - cloned + adjusted from `merge-v2:SETUP.md`)
 
 ## Acceptance
 
