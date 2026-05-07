@@ -463,7 +463,8 @@ Lexcube uses lots of amazing open-source software and packages, including:
 * WebSocket communication: [Socket.io](https://socket.io/)
 
 ## Development Installation & Guide
-See [CONTRIBUTING.md](CONTRIBUTING.md).
+For Setup version 2.0.0 see the [Setup Guide](SETUP.md). (1.0.4 is basically the same)
+For a Development Guidelines see [CONTRIBUTING.md](CONTRIBUTING.md). (Note: Setup is outdated there)
 
 
 ## License
