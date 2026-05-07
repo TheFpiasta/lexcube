@@ -785,8 +785,8 @@ class ParameterMetadataParser:
         z_samples_target = 50
         z_sampling_step = max(1, math.floor(float(last_time_slice - first_time_slice + 1) / z_samples_target)) if approximate_only else 1
         z_samples_actual = math.ceil(float(last_time_slice - first_time_slice + 1) / z_sampling_step)
-        minimum_value = np.Infinity
-        maximum_value = -np.Infinity
+        minimum_value = np.inf
+        maximum_value = -np.inf
         observations = 0
         local_1quantiles = []
         local_99quantiles = []
