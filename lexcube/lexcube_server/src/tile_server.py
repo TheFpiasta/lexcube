@@ -479,7 +479,7 @@ def open_dataset(config: ServerConfig, path: str, skip_print: bool = False) -> x
     aws_s3_hosted = path.startswith("s3://")
     http_hosted = path.startswith("http://")
     remote_hosted = aws_s3_hosted or http_hosted
-    file_extension = path.split(".")[-1]
+    file_extension = path.rstrip("/").split(".")[-1]
     protocol = path.split("://")[0]
     if not skip_print:
         print(f"        > Opening {f'{protocol}-hosted' if remote_hosted else 'locally saved'} dataset ({path})")
