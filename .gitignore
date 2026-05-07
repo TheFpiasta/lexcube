@@ -61,10 +61,8 @@ instance/
 
 # Sphinx documentation
 docs/_build/
-docs/source/_static/embed-bundle.js
-docs/source/_static/embed-bundle.js.map
-docs/source/_static/*.embed-bundle.js
-docs/source/_static/*.embed-bundle.js.map
+docs/source/_static/*
+!docs/source/_static/helper.js
 
 # PyBuilder
 target/
