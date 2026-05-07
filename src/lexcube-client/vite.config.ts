@@ -10,6 +10,9 @@ export default defineConfig({
       three: path.resolve(__dirname, 'node_modules/three'),
     },
   },
+  server: {
+    port: 8080,
+  },
   build: {
     outDir: '../../dist/client',
     emptyOutDir: true,
