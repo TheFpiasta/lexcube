@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import enum
 import gc
 from hashlib import sha512
@@ -200,6 +201,8 @@ def get_current_memory_usage(s: str = ""):
 class TileCompressor:
     def __init__(self, current_output_tile_format: str) -> None:
         self.current_output_tile_format = current_output_tile_format # set for widget mode to lossless, during pregeneration 
+        self.default_compression_tolerance = -1
+        self.anomaly_compression_tolerance = -1
         self.tile_data_compressor_zfp = ZfpCompressor()
         self.tile_data_compressor_blosc_lz4_lossless = numcodecs.blosc.Blosc()
         self.nan_mask_compressor = numcodecs.lz4.LZ4(5)
@@ -337,14 +340,15 @@ def downscale_nan_factor_mask(arr: np.ndarray, factor=0.5):
         )
 
 
-def downscale_fast_3d(arr: np.ndarray, factor=0.5): # but this probably propogates NaN values, so it sucks
+def downscale_fast_3d(arr, factor=0.5): # but this probably propogates NaN values, so it sucks
     if factor != 0.5:
         print("Shrinking 3D array by non-2-divisor is not supported")
         return
-    resized_slices = [cv2.resize(s, None, fx=factor, fy=factor, interpolation=cv2.INTER_LINEAR) for s in arr] # bilinear filtering for each plane
-    target = np.zeros(tuple(int(x/2) for x in arr.shape), dtype=arr.dtype)
-    for arr in range(int(arr.shape[0] / 2)):
-        target[arr] = (resized_slices[arr*2]+resized_slices[arr*2+1])/2 # merge adjacent planes, trilinear filtering
+    v = np.asarray(arr, dtype=np.float32)
+    resized_slices = [cv2.resize(s, None, fx=factor, fy=factor, interpolation=cv2.INTER_LINEAR) for s in v] # bilinear filtering for each plane
+    target = np.zeros(tuple(int(x/2) for x in v.shape), dtype=v.dtype)
+    for i in range(int(v.shape[0] / 2)):
+        target[i] = (resized_slices[i*2]+resized_slices[i*2+1])/2 # merge adjacent planes, trilinear filtering
     return target
 
 def interpolate_nans_1d(array):
@@ -1489,10 +1493,13 @@ class Tile3D:
             print(f"Invalid, passed {len(source_data.shape)}-dimensonal source data to tile generation")
 
         if lod_factor > 1:
-            raise NotImplementedError("3D LoD > 0 generate_from_data not yet implemented")
-            # inverse_lod_factor = 1 / lod_factor
+            inverse_lod_factor = 1 / lod_factor
+            # TODO: replace with faster NaN-safe downscaling
             # data_values = downscale_fast_3d(data_values, inverse_lod_factor)
-            # quantile_indices = downscale_fast_3d(quantile_indices, inverse_lod_factor) # TODO: not sure if scientifically accurate
+            # quantile_indices = downscale_fast_3d(quantile_indices, inverse_lod_factor)
+            data_values = downscale_3d_nanmean(np.asarray(data_values, dtype=np.float32), inverse_lod_factor)
+            quantile_indices = downscale_nan_factor_mask(quantile_indices, inverse_lod_factor)
+            nan_factors = downscale_nan_factor_mask(nan_factors, inverse_lod_factor)
         
         adjusted_resample_resolution = 1
 
@@ -1539,7 +1546,7 @@ class Tile3D:
         np.nan_to_num(tile_data, copy=False)
         compressed_tile_data = tile_compressor.compress_tile_data((self.tx, self.ty, self.tz), tile_data, self.is_anomaly_tile())
         decompressed_tile_data = tile_compressor.decompress_tile_data(compressed_tile_data)
-        errors = np.abs(decompressed_tile_data[:source_values.shape[0], :source_values.shape[1]] - source_values)
+        errors = np.abs(decompressed_tile_data[:source_values.shape[0], :source_values.shape[1], :source_values.shape[2]] - source_values)
         max_error = np.nanmax(errors, initial=0) + added_compression_error
         print(f"Tile {self} -- max compression error: {max_error}")
         return self.get_tile_metadata_bytes(resample_resolution, len(compressed_masks), max_error, compressed_dtype) + statistical_data_bytes + compressed_masks + compressed_tile_data
@@ -1861,6 +1868,7 @@ class TileServer:
             return print(f"Dataset id or parameter not found ({dataset_id} / {parameter})")
         
         tiles = []
+        blockfile = None
         if tile_type == "2d":
             index_dimension = dimension_mapping[request_data["indexDimension"]]
             index_value = request_data["indexValue"]
@@ -1883,13 +1891,37 @@ class TileServer:
         else:
             return print(f"Invalid tile type {tile_type}")
         
-        if not blockfile.exists():
-            return print(f"Request cannot be answered, block file not found: {blockfile.path}")
+        if blockfile and blockfile.exists():
+            blockfile.load_header()
+            (sizes, data) = blockfile.get_tile_data(tiles)
+            await socketio.emit("tile_data", { "metadata": request_data, "dataSizes": sizes, "data": bytes(data) }, to=sender_id)
+            return
 
-        blockfile.load_header()
-        (sizes, data) = blockfile.get_tile_data(tiles)
+        is_anomaly = parameter.endswith(ANOMALY_PARAMETER_ID_SUFFIX)
+        real_parameter = parameter[:-len(ANOMALY_PARAMETER_ID_SUFFIX)] if is_anomaly else parameter
+        source_data, _ = open_parameter_data(dataset.ds, real_parameter)
 
-        await socketio.emit("tile_data", { "metadata": request_data, "dataSizes": sizes, "data": bytes(data) }, to=sender_id)
+        def generate_tiles():
+            data = bytearray()
+            sizes = []
+            for tile in tiles:
+                actual_tile = tile.get_anomaly_tile() if is_anomaly else tile
+                if tile_type == "2d":
+                    d = actual_tile.generate_from_data(source_data, self.tile_compressor, compressed_dtype=source_data.dtype)
+                else:
+                    d = actual_tile.generate_and_compress_from_data(source_data, self.tile_compressor, compressed_dtype=source_data.dtype)
+                data += d
+                sizes.append(len(d))
+            return (sizes, bytes(data))
+
+        try:
+            loop = asyncio.get_event_loop()
+            (sizes, data) = await loop.run_in_executor(None, generate_tiles)
+        except Exception as e:
+            print(f"Tile generation failed: {e}", flush=True)
+            return
+
+        await socketio.emit("tile_data", { "metadata": request_data, "dataSizes": sizes, "data": data }, to=sender_id)
 
     async def handle_event_request_standalone(self, socketio, sender_id, request_data):
         event_type = request_data["eventType"]
