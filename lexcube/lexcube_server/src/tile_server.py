@@ -387,10 +387,12 @@ def sample_data_array_2d(data, sample_factor):
     return np.stack([s[i] for i in range(len(s))]) 
 
 def calculate_max_lod(tile_size: int, dims: list[int]):
+    if tile_size <= 0 or len(dims) == 0 or min(dims) <= 0 or max(dims) <= 0:
+        return 0
     desired_max_lod = math.ceil(-math.log2(tile_size / max(dims)))
     largest_lod_possible_from_dims = math.floor(math.log2(min(dims)))
     largest_lod_possible_from_tile_size = math.floor(math.log2(tile_size))
-    return min(desired_max_lod, largest_lod_possible_from_dims, largest_lod_possible_from_tile_size)
+    return max(0, min(desired_max_lod, largest_lod_possible_from_dims, largest_lod_possible_from_tile_size))
 
 def patch_data(data: np.ndarray, dataset_id: str, parameter: str, dataset_config: DatasetConfig = None) -> np.ndarray:
     if len(data.shape) == 4: # RGB data does not need patching
@@ -1032,9 +1034,12 @@ class Dataset:
             
 
     def calculate_max_lod(self, tile_size: int):
-        desired_max_lod = math.ceil(-math.log2(tile_size / max([self.meta_data.z_max, self.meta_data.y_max, self.meta_data.x_max])))
-        largest_lod_possible = math.floor(math.log2(min([self.meta_data.z_max, self.meta_data.y_max, self.meta_data.x_max])))
-        return min(desired_max_lod, largest_lod_possible)
+        dims = [self.meta_data.z_max, self.meta_data.y_max, self.meta_data.x_max]
+        if tile_size <= 0 or min(dims) <= 0 or max(dims) <= 0:
+            return 0
+        desired_max_lod = math.ceil(-math.log2(tile_size / max(dims)))
+        largest_lod_possible = math.floor(math.log2(min(dims)))
+        return max(0, min(desired_max_lod, largest_lod_possible))
 
     def generate_block_file_indices(self):
         self.block_2d_contents_by_dim_and_lod = []
@@ -2164,5 +2169,3 @@ class BlockFile3D:
                 os.remove(tile_disk_storage.get_tile_3d_path(t))
         
         return len(header_data) + len(body_data)
-
-

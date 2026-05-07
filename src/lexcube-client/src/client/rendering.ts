@@ -2491,11 +2491,18 @@ class CubeRendering {
     }
 
     updateTileTextureView3dFromVisibleTiles(visibleTiles: Tile3D[]) {
+        if (visibleTiles.length === 0) {
+            return;
+        }
         const lod = visibleTiles[0].lod;
         const ttv = this.tile3dVolumeRenderedCubeTileTextureViews[lod];
+        if (!ttv) {
+            console.warn("Missing TileTextureView3D for lod", lod);
+            return;
+        }
 
         const ttvCoversAll = visibleTiles.every(t => ttv.containsTile(t))
-        if (!ttvCoversAll || this.tile3dVolumeRenderedCubeTileTextureViews[lod].needsInitialUpdate()) {
+        if (!ttvCoversAll || ttv.needsInitialUpdate()) {
             this.updateTileTextureView3D(lod);
         }
     }
@@ -2508,9 +2515,13 @@ class CubeRendering {
             }
             const lod = faceTiles[0].lod;
             const ttv = this.tile2dFaceRenderedCubeTileTextureViews[face][lod];
+            if (!ttv) {
+                console.warn("Missing TileTextureView2D for face/lod", face, lod);
+                continue;
+            }
 
             const ttvCoversAll = faceTiles.every(t => ttv.containsTile(t))
-            if (!ttvCoversAll || this.tile2dFaceRenderedCubeTileTextureViews[face][lod].needsInitialUpdate()) {
+            if (!ttvCoversAll || ttv.needsInitialUpdate()) {
                 this.updateTileTextureView2d(face, lod);
             }
         }
@@ -2527,6 +2538,9 @@ class CubeRendering {
 
     possibleToRenderLod3d(lod: number) {    
         const ttv = this.tile3dVolumeRenderedCubeTileTextureViews[lod];
+        if (!ttv) {
+            return false;
+        }
         return ttv.possibleToRender(this.context.interaction.cubeSelection.getDisplaySizeVector3d());
     }
 
@@ -2575,11 +2589,13 @@ class CubeRendering {
     }
 
     getTileTextureView2dSizeInTiles(face: number, lod: number) {
-        return this.tile2dFaceRenderedCubeTileTextureViews[face][lod].getSizeInTiles();
+        const ttv = this.tile2dFaceRenderedCubeTileTextureViews[face][lod];
+        return ttv ? ttv.getSizeInTiles() : new Vector2(0, 0);
     }
 
     getTileTextureView2dOffsetInTiles(face: number, lod: number) {
-        return this.tile2dFaceRenderedCubeTileTextureViews[face][lod].getOffsetInTiles();
+        const ttv = this.tile2dFaceRenderedCubeTileTextureViews[face][lod];
+        return ttv ? ttv.getOffsetInTiles() : new Vector2(0, 0);
     }
 
     getTileTextureView3dSize(lod: number) {
@@ -2587,15 +2603,17 @@ class CubeRendering {
             return this.blockBasedRenderPasses[this.blockBasedRenderPassCurrent].tileTextureView.getSizeInTiles();
         }
         const ttv = this.tile3dVolumeRenderedCubeTileTextureViews[lod];
-        return ttv.getSizeInTiles();
+        return ttv ? ttv.getSizeInTiles() : new Vector3(0, 0, 0);
     }
 
     tileContainedInTileTextureView2d(tile: Tile2D, offsetOverride?: Vector2) {
-        return this.tile2dFaceRenderedCubeTileTextureViews[tile.face][tile.lod].containsTile(tile, offsetOverride);
+        const ttv = this.tile2dFaceRenderedCubeTileTextureViews[tile.face][tile.lod];
+        return ttv ? ttv.containsTile(tile, offsetOverride) : false;
     }
 
     tileContainedInTileTextureView3d(tile: Tile3D, offsetOverride?: Vector3) {
-        return this.tile3dVolumeRenderedCubeTileTextureViews[tile.lod].containsTile(tile, offsetOverride);
+        const ttv = this.tile3dVolumeRenderedCubeTileTextureViews[tile.lod];
+        return ttv ? ttv.containsTile(tile, offsetOverride) : false;
     }
 
     getTileTextureView3dOffset(lod: number) {
