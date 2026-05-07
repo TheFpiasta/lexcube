@@ -152,7 +152,6 @@ lexcube/nbextension/*.index.*
 
 **/.tiles/
 **/.venv/
-**/node_modules/
 **/build/
 **/.ipynb_checkpoints/
 **/__pycache__/
@@ -174,3 +173,4 @@ docs/source/**/*.svg
 lexcube/nbextension/**/*.svg
 lexcube/**/*.png
 docs/**/*.png
+/*.ipynb
