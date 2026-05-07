@@ -174,3 +174,4 @@ lexcube/nbextension/**/*.svg
 lexcube/**/*.png
 docs/**/*.png
 /*.ipynb
+config.json
