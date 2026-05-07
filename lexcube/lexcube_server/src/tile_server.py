@@ -1732,7 +1732,7 @@ class TileServer:
         threads = self.config.pre_generation_threads
         print(f"* Discover metadata for dataset {dataset.id} (using {threads} threads)")
         metadata = {}
-        with multiprocessing.Pool(threads) as pool:
+        with multiprocessing.get_context("spawn").Pool(threads) as pool:
             metadatas = pool.starmap(ParameterMetadataParser(self.config, dataset.min_max_values_approximate_only, dataset.dataset_config.dataset_path, dataset.id).discover_metadata_for_parameter, [(dataset.parameter_metadata.get(p), p) for p in dataset.real_parameters + dataset.composite_rgb_parameters])
             for m in metadatas:
                 metadata[m.name] = m.to_dict()
