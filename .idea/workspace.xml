@@ -1,0 +1,214 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="AIAssistantCustomInstructionsStorage">
+    <option name="instructions">
+      <map>
+        <entry key="AIAssistant.VCS.GenerateCommitMessage">
+          <value>
+            <AIAssistantStoredInstruction>
+              <option name="actionId" value="AIAssistant.VCS.GenerateCommitMessage" />
+              <option name="content" value="Avoid overly verbose descriptions or unnecessary details.&#10;&#10;Use Conventional Commits 1.0.0.&#10;&#10;NEVER use backtick in the text.&#10; " />
+            </AIAssistantStoredInstruction>
+          </value>
+        </entry>
+      </map>
+    </option>
+  </component>
+  <component name="AutoImportSettings">
+    <option name="autoReloadType" value="SELECTIVE" />
+  </component>
+  <component name="ChangeListManager">
+    <list default="true" id="7cd8356a-28bc-4a14-9ce1-704b063cf7ce" name="Changes" comment="fix: add empty _data dir" />
+    <option name="SHOW_DIALOG" value="false" />
+    <option name="HIGHLIGHT_CONFLICTS" value="true" />
+    <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
+    <option name="LAST_RESOLUTION" value="IGNORE" />
+  </component>
+  <component name="CopilotPersistence">
+    <persistenceIdMap>
+      <entry key="_C:/Users/felix/WebstormProjects/lexcube" value="3DUzTIxGU6L3xvSkC6BdZjD4Buv" />
+    </persistenceIdMap>
+  </component>
+  <component name="EmbeddingIndexingInfo">
+    <option name="cachedIndexableFilesCount" value="159" />
+    <option name="fileBasedEmbeddingIndicesEnabled" value="true" />
+  </component>
+  <component name="Git.Settings">
+    <favorite-branches>
+      <branch-storage>
+        <map>
+          <entry type="REMOTE">
+            <value>
+              <list>
+                <branch-info repo="$PROJECT_DIR$" source="origin/dev" />
+              </list>
+            </value>
+          </entry>
+        </map>
+      </branch-storage>
+    </favorite-branches>
+    <option name="INCOMING_COMMITS_CHECK_STRATEGY" value="FETCH" />
+    <option name="RECENT_BRANCH_BY_REPOSITORY">
+      <map>
+        <entry key="$PROJECT_DIR$" value="fix-v2-version" />
+      </map>
+    </option>
+    <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
+  </component>
+  <component name="GitHubPullRequestSearchHistory">{
+  &quot;lastFilter&quot;: {
+    &quot;state&quot;: &quot;OPEN&quot;,
+    &quot;assignee&quot;: &quot;TheFpiasta&quot;
+  }
+}</component>
+  <component name="GithubPullRequestsUISettings">{
+  &quot;selectedUrlAndAccountId&quot;: {
+    &quot;url&quot;: &quot;https://github.com/TheFpiasta/lexcube.git&quot;,
+    &quot;accountId&quot;: &quot;595eb822-c04f-4c8a-b2a9-92c46f8cfd34&quot;
+  }
+}</component>
+  <component name="McpProjectServerCommands">
+    <commands />
+    <urls />
+  </component>
+  <component name="ProjectColorInfo">{
+  &quot;associatedIndex&quot;: 7,
+  &quot;fromUser&quot;: false
+}</component>
+  <component name="ProjectId" id="3DUzTIxGU6L3xvSkC6BdZjD4Buv" />
+  <component name="ProjectViewState">
+    <option name="hideEmptyMiddlePackages" value="true" />
+    <option name="showLibraryContents" value="true" />
+  </component>
+  <component name="PropertiesComponent"><![CDATA[{
+  "keyToString": {
+    "ModuleVcsDetector.initialDetectionPerformed": "true",
+    "RunOnceActivity.MCP Project settings loaded": "true",
+    "RunOnceActivity.ShowReadmeOnStart": "true",
+    "RunOnceActivity.TerminalTabsStorage.copyFrom.TerminalArrangementManager.252": "true",
+    "RunOnceActivity.git.unshallow": "true",
+    "RunOnceActivity.typescript.service.memoryLimit.init": "true",
+    "codeWithMe.voiceChat.enabledByDefault": "false",
+    "com.intellij.ml.llm.matterhorn.ej.ui.settings.DefaultModelSelectionForGA.v1": "true",
+    "git-widget-placeholder": "dev",
+    "git.auto.fetch.suggestion.counter": "1",
+    "javascript.preferred.runtime.type.id": "node",
+    "junie.onboarding.icon.badge.shown": "true",
+    "node.js.detected.package.eslint": "true",
+    "node.js.detected.package.tslint": "true",
+    "node.js.selected.package.eslint": "(autodetect)",
+    "node.js.selected.package.tslint": "(autodetect)",
+    "nodejs_package_manager_path": "npm",
+    "prettierjs.PrettierConfiguration.Package": "C:\\Users\\felix\\WebstormProjects\\lexcube\\node_modules\\prettier",
+    "settings.editor.selected.configurable": "com.jetbrains.python.configuration.PyActiveSdkModuleConfigurable",
+    "to.speed.mode.migration.done": "true",
+    "ts.external.directory.path": "C:\\Users\\felix\\WebstormProjects\\lexcube\\node_modules\\typescript\\lib",
+    "vue.rearranger.settings.migration": "true"
+  }
+}]]></component>
+  <component name="SharedIndexes">
+    <attachedChunks>
+      <set>
+        <option value="bundled-js-predefined-d6986cc7102b-3bd3a6803838-JavaScript-WS-261.22158.274" />
+      </set>
+    </attachedChunks>
+  </component>
+  <component name="TaskManager">
+    <task active="true" id="Default" summary="Default task">
+      <changelist id="7cd8356a-28bc-4a14-9ce1-704b063cf7ce" name="Changes" comment="" />
+      <created>1778351442379</created>
+      <option name="number" value="Default" />
+      <option name="presentableId" value="Default" />
+      <updated>1778351442379</updated>
+      <workItem from="1778351443443" duration="791000" />
+      <workItem from="1778403741534" duration="8858000" />
+    </task>
+    <task id="LOCAL-00001" summary="feat: fix cant change branch">
+      <option name="closed" value="true" />
+      <created>1778351605196</created>
+      <option name="number" value="00001" />
+      <option name="presentableId" value="LOCAL-00001" />
+      <option name="project" value="LOCAL" />
+      <updated>1778351605196</updated>
+    </task>
+    <task id="LOCAL-00002" summary="fix: data dir not existing">
+      <option name="closed" value="true" />
+      <created>1778408270158</created>
+      <option name="number" value="00002" />
+      <option name="presentableId" value="LOCAL-00002" />
+      <option name="project" value="LOCAL" />
+      <updated>1778408270158</updated>
+    </task>
+    <task id="LOCAL-00003" summary="fix: duplicated config example file">
+      <option name="closed" value="true" />
+      <created>1778408368004</created>
+      <option name="number" value="00003" />
+      <option name="presentableId" value="LOCAL-00003" />
+      <option name="project" value="LOCAL" />
+      <updated>1778408368004</updated>
+    </task>
+    <task id="LOCAL-00004" summary="core: switching to yarn for performance improvements and to avoid npm windows rollup bug">
+      <option name="closed" value="true" />
+      <created>1778408544590</created>
+      <option name="number" value="00004" />
+      <option name="presentableId" value="LOCAL-00004" />
+      <option name="project" value="LOCAL" />
+      <updated>1778408544590</updated>
+    </task>
+    <task id="LOCAL-00005" summary="feat: improve multiprocessing error handling">
+      <option name="closed" value="true" />
+      <created>1778410666710</created>
+      <option name="number" value="00005" />
+      <option name="presentableId" value="LOCAL-00005" />
+      <option name="project" value="LOCAL" />
+      <updated>1778410666710</updated>
+    </task>
+    <task id="LOCAL-00006" summary="fix: testing assets&#10;&#10;- Add conftest.py for customized pytest item collection and skipping logic based on dependencies and environment variables.&#10;- Introduce file-mock.ts and raw-mock.ts for file handling in tests.&#10;- Enhance jest configuration: add jsdom environment and setup files.&#10;- Add missing jest-environment-jsdom dependency">
+      <option name="closed" value="true" />
+      <created>1778411712856</created>
+      <option name="number" value="00006" />
+      <option name="presentableId" value="LOCAL-00006" />
+      <option name="project" value="LOCAL" />
+      <updated>1778411712856</updated>
+    </task>
+    <task id="LOCAL-00007" summary="fix: add empty _data dir">
+      <option name="closed" value="true" />
+      <created>1778412586517</created>
+      <option name="number" value="00007" />
+      <option name="presentableId" value="LOCAL-00007" />
+      <option name="project" value="LOCAL" />
+      <updated>1778412586517</updated>
+    </task>
+    <option name="localTasksCounter" value="8" />
+    <servers />
+  </component>
+  <component name="TypeScriptGeneratedFilesManager">
+    <option name="version" value="3" />
+  </component>
+  <component name="VcsManagerConfiguration">
+    <option name="CHECK_CODE_SMELLS_BEFORE_PROJECT_COMMIT" value="false" />
+    <option name="CHECK_NEW_TODO" value="false" />
+    <MESSAGE value="feat: fix cant change branch" />
+    <MESSAGE value="fix: data dir not existing" />
+    <MESSAGE value="fix: duplicated config example file" />
+    <MESSAGE value="core: switching to yarn for performance improvements and to avoid npm windows rollup bug" />
+    <MESSAGE value="feat: improve multiprocessing error handling" />
+    <MESSAGE value="Add tests and setup for example notebooks and update dependencies&#10;&#10;- **conftest.py**: Add pytest setup for optional dependencies and environment variable checks for notebook tests.&#10;- **jest.config.js**: Update Jest configuration to use `jsdom` environment, include new file mocks, and modify transform settings.&#10;- **yarn.lock &amp; package.json**: Update dependencies for testing and add new packages (e.g., `jest-environment-jsdom`).&#10;- **test_example.py**: Enhance test to check metadata dimensions for Cube3DWidget." />
+    <MESSAGE value="feat: integrate custom mocking for file imports and enhance test setup&#10;&#10;- Added `conftest.py` for conditional test skipping based on module availability and environment flags.&#10;- Introduced `file-mock.ts` and `raw-mock.ts` for Jest to handle specific file mock scenarios.&#10;- Updated `jest.config.js` to include custom setup files and mocked file extensions.&#10;- Enhanced test example to verify metadata in `Cube3DWidget`. &#10;- Expanded `yarn.lock` with new and updated dependencies for comprehensive testing and broader feature support.&#10;- Imported `jest-environment-jsdom` for improved testing environment simulation." />
+    <MESSAGE value="feat: add test configuration and improve example tests&#10;&#10;- Add `conftest.py` for conditional skipping of tests based on the presence of optional dependencies or environment variables.&#10;- Introduce test utility files: `file-mock.ts`, `jest-setup.ts`, and `raw-mock.ts` to aid in testing.&#10;- Update `yarn.lock` with new dependencies for testing.&#10;- Enhance `test_example_creation_blank` in `test_example.py` to include metadata validation.&#10;- Integrate `jest-environment-jsdom` and adjust `jest.config.js` to improve test environment and" />
+    <MESSAGE value="test: add pytest configuration with conditional skipping and test environment setup&#10;&#10;- Add `conftest.py` to configure pytest with conditional test skipping based on module availability and environment variables.&#10;- Set up JSDOM test environment in Jest and map file extensions using mock files.&#10;- Update `yarn.lock` with new dependencies for test setup.&#10;- Modify existing tests to accommodate metadata checks and replace `assert` statements.&#10;- Include `jest-environment-jsdom` in `package.json` dependencies." />
+    <MESSAGE value="feat: add automated test configuration and mock files&#10;&#10;- Add `conftest.py` for conditional test skipping based on optional dependencies and environment variables.&#10;- Introduce Jest setup and mock files (`file-mock.ts`, `jest-setup.ts`, `raw-mock.ts`) for handling test file formats.&#10;- Update `jest.config.js` to use `jsdom` environment and configure module name mappings and setup files.&#10;- Modify `yarn.lock` to include required dependencies for the new test setup.&#10;- Update `test_example.py` with a new testing approach for `Cube3DWidget` with metadata assertions." />
+    <MESSAGE value="feat: introduce test configuration and setup improvements&#10;&#10;- Add conftest.py for pytest configuration with conditional example tests skipping and module checks.&#10;- Integrate jest-setup.ts for global setup in Jest and add file mocks.&#10;- Extend jest.config.js with new setup files and environment configuration.&#10;- Update yarn.lock with additional dependencies for enhanced testing support.&#10;- Include 'jest-environment-jsdom' in package.json dependencies." />
+    <MESSAGE value="fix: testing assets&#10;&#10;- Add conftest.py for customized pytest item collection and skipping logic based on dependencies and environment variables.&#10;- Introduce file-mock.ts and raw-mock.ts for file handling in tests.&#10;- Enhance jest configuration: add jsdom environment and setup files.&#10;- Add missing jest-environment-jsdom dependency" />
+    <MESSAGE value="fix: add empty _data dir" />
+    <option name="LAST_COMMIT_MESSAGE" value="fix: add empty _data dir" />
+  </component>
+  <component name="github-copilot-workspace">
+    <instructionFileLocations>
+      <option value=".github/instructions" />
+    </instructionFileLocations>
+    <promptFileLocations>
+      <option value=".github/prompts" />
+    </promptFileLocations>
+  </component>
+</project>
