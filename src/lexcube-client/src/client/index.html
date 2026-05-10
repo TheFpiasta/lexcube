@@ -29,7 +29,6 @@
     <meta name="msapplication-TileImage" content="/ms-icon-144x144.png">
     <meta name="theme-color" content="#ffffff">
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
-    <link href="nouislider.css" rel="stylesheet">
     <link href="style.css" rel="stylesheet">
     <style>
         html, body {
@@ -82,11 +81,11 @@
 
 
     <div class="toolbar-ui">
-        <div class="toolbar-ui-button fullscreen-button" title="Enter/exit fullscreen" style="background-image: url('fullscreen.svg')"></div>
-        <div class="toolbar-ui-button data-select-button" title="Options" onclick="let c = this.parentNode.parentNode.getElementsByClassName('options-ui')[0]; c.style.display = c.style.display == 'none' ? 'block' : 'none';" style="background-image: url('data-management.svg')"></div>
+        <div class="toolbar-ui-button fullscreen-button" title="Enter/exit fullscreen" style="background-image: url('/fullscreen.svg')"></div>
+        <div class="toolbar-ui-button data-select-button" title="Options" onclick="let c = this.parentNode.parentNode.getElementsByClassName('options-ui')[0]; c.style.display = c.style.display == 'none' ? 'block' : 'none';" style="background-image: url('/data-management.svg')"></div>
         <div class="animation-dropdown noselect">
-            <div class="toolbar-ui-button animate-start-button" title="Start Animation" style="background-image: url('play.svg')"></div>
-            <div class="toolbar-ui-button animate-stop-button" title="Stop Animation" style="background-image: url('pause.svg');display:none;"></div>
+            <div class="toolbar-ui-button animate-start-button" title="Start Animation" style="background-image: url('/play.svg')"></div>
+            <div class="toolbar-ui-button animate-stop-button" title="Stop Animation" style="background-image: url('/pause.svg');display:none;"></div>
 
             <div class="animation-dropdown-content">
                 <div class="ui-normal noselect animation-settings-ui">
@@ -135,12 +134,12 @@
                 </div>
             </div>
         </div>
-        <div class="toolbar-ui-button download-dataset-subset-button" title="Download currently visible data subset" style="background-image: url('download.svg'); display: none;"></div>
-        <div class="toolbar-ui-button download-image-button" title="Download Image" style="background-image: url('download.svg'); display: none;"></div>
-        <div class="toolbar-ui-button download-template-button" title="Download Print Template" style="background-image: url('download-print-template.svg');"></div>
-        <div class="toolbar-ui-button gps-button" title="Show Current Location on Cube" style="background-image: url('location.svg');"></div>
-        <div class="toolbar-ui-button enable-volume-viz-button" title="Enable Volume Visualization" style="background-image: url('enable-volume-viz.svg'); display:none;"></div>
-        <div class="toolbar-ui-button disable-volume-viz-button" title="Disable Volume Visualization" style="background-image: url('disable-volume-viz.svg');display:none;"></div>
+        <div class="toolbar-ui-button download-dataset-subset-button" title="Download currently visible data subset" style="background-image: url('/download.svg'); display: none;"></div>
+        <div class="toolbar-ui-button download-image-button" title="Download Image" style="background-image: url('/download.svg'); display: none;"></div>
+        <div class="toolbar-ui-button download-template-button" title="Download Print Template" style="background-image: url('/download-print-template.svg');"></div>
+        <div class="toolbar-ui-button gps-button" title="Show Current Location on Cube" style="background-image: url('/location.svg');"></div>
+        <div class="toolbar-ui-button enable-volume-viz-button" title="Enable Volume Visualization" style="background-image: url('/enable-volume-viz.svg'); display:none;"></div>
+        <div class="toolbar-ui-button disable-volume-viz-button" title="Disable Volume Visualization" style="background-image: url('/disable-volume-viz.svg');display:none;"></div>
     </div>
 
     <div class="flex-col-center-end nopointer noselect bottom-left-ui">
@@ -182,15 +181,15 @@
 
 
     <div class="noselect top-left-ui ui-normal jupyter-notification" onclick="this.style.display = 'none';localStorage.setItem('dismiss-jupyter', `${Date.now()}`);" style="padding: 1px;">
-        <a href='https://github.com/msoechting/lexcube' target='_blank'><div style="background-image: url('lexcube-jupyter.png'); width: 337px;;
+        <a href='https://github.com/msoechting/lexcube' target='_blank'><div style="background-image: url('/lexcube-jupyter.png'); width: 337px;;
         height: 140px;background-size: contain; cursor:pointer"></div></a>
         <div class="close-button" onclick="this.parentNode.onclick()"></div>
     </div>
 
     <div id="attribution-banner" class="nopointer noselect attribution-banner" style="height: 7%; top: 0px; position: absolute; width: 85%; color: white; font-size: 1.2em; flex-direction: row; font-size: small; display: flex; align-items: center; justify-content: center; gap: 1%; left: 7.5%;">
-        <img src="WBM_UL_RGB_digital_white.png" style="max-height: 100%;  max-width: fit-content;"/>
-        <img src="lexcube-logo.png" style="max-height: 60%;  max-width: fit-content;"/>
-        <img src="ESA_logo_2020_White.png" style="max-height: 100%;  max-width: fit-content;"/>
+        <img src="/WBM_UL_RGB_digital_white.png" style="max-height: 100%;  max-width: fit-content;"/>
+        <img src="/lexcube-logo.png" style="max-height: 60%;  max-width: fit-content;"/>
+        <img src="/ESA_logo_2020_White.png" style="max-height: 100%;  max-width: fit-content;"/>
     </div>
     
     <div class="fullscreen-wrapper noselect nopointer flex-row-center-end">
@@ -250,7 +249,7 @@
             <div class="volume-viz-loader-column" style="width: 350px; display: flex; flex-direction: column; flex: 1; justify-content: center; align-items: center;">
                 <div style="color: white; margin-top: 10px;">Loading voxel visualization...</div>
                 <video playsinline loop muted autoplay style='height: auto; width: 120px;'>
-                    <source src="loader.mp4" type="video/mp4">
+                    <source src="/loader.mp4" type="video/mp4">
                 </video>
             </div>
             <div class="volume-viz-main-column" style="width: 350px; display: none; flex-direction: column; flex: 1;">
@@ -263,9 +262,9 @@
 
                 <div class="volume-viz-slider-row" style="display: flex; flex-direction: row; align-items: center;">
                     <div class="volume-viz-threshold-slider-signs" style="width:32px;display: flex; flex-direction: column; cursor: pointer;"> 
-                        <div class="volume-viz-threshold-slider-sign-less-than" style="width: 24px;height: 24px; background-size: cover; background-image: url('less-than.svg');"></div>
-                        <div class="volume-viz-threshold-slider-sign-interval" style="width: 24px;height: 24px; background-size: cover; background-image: url('interval.svg');"></div>
-                        <div class="volume-viz-threshold-slider-sign-greater-than" style="width: 24px;height: 24px; background-size: cover; background-image: url('greater-than.svg');"></div>
+                        <div class="volume-viz-threshold-slider-sign-less-than" style="width: 24px;height: 24px; background-size: cover; background-image: url('/less-than.svg');"></div>
+                        <div class="volume-viz-threshold-slider-sign-interval" style="width: 24px;height: 24px; background-size: cover; background-image: url('/interval.svg');"></div>
+                        <div class="volume-viz-threshold-slider-sign-greater-than" style="width: 24px;height: 24px; background-size: cover; background-image: url('/greater-than.svg');"></div>
                     </div>
                     <div class="slider-parent" style="flex: 2; padding: 0px;">
                         <div class="slider volume-viz-threshold-slider"></div>
@@ -321,7 +320,7 @@
          <div class="resolution-change-popup" style="display: none; justify-content: center; align-items: center; height: 100%; ">
                 <div style='width: 250px; height: 340px; display:flex; align-items: center; gap: 1rem; margin-top: 0.5rem; margin-bottom: 0.5rem; flex-direction: column; padding-left: 2rem; padding-right: 2rem; padding-top: 1rem; padding-bottom: 2rem; background-color: rgba(4, 9, 25); box-shadow: 0 0 30px rgba(0, 0, 0, 0.5); '>
                     <video playsinline loop muted autoplay style='height: auto; width: 250px;'>
-                        <source src="loader.mp4" type="video/mp4">
+                        <source src="/loader.mp4" type="video/mp4">
                     </video>
                     <div style="display: flex; flex-direction: column; align-items: center; gap: 0.5rem;">
                         <div class="resolution-change-heading" style='font-size: 1.3rem; color:white; text-align: center;'>Expanding 3D storage...</div>
@@ -359,18 +358,18 @@
                 <div class="tutorial-mouse" style="display: none;">
                     <div style="margin-bottom: 5px;">1. Drag and scroll on the <b>background</b> to move and rotate the cube.</div>
                     <div style="margin-bottom: 5px;">2. Drag and scroll on the <b>cube</b> to interact with the data.</div>
-                    <div style="margin-bottom: 5px;">3. Select different data <img src="data-management.svg" style="width: 24px; height: 24px; vertical-align: middle;"/>, play an animation <img src="play.svg" style="width: 24px; height: 24px; vertical-align: middle;"/>, print your own cube <img src="download-print-template.svg" style="width: 24px; height: 24px; vertical-align: middle;"/>, or explore voxel mode <img src="enable-volume-viz.svg" style="width: 24px; height: 24px; vertical-align: middle;"/>.</div>
+                    <div style="margin-bottom: 5px;">3. Select different data <img src="/data-management.svg" style="width: 24px; height: 24px; vertical-align: middle;"/>, play an animation <img src="/play.svg" style="width: 24px; height: 24px; vertical-align: middle;"/>, print your own cube <img src="/download-print-template.svg" style="width: 24px; height: 24px; vertical-align: middle;"/>, or explore voxel mode <img src="/enable-volume-viz.svg" style="width: 24px; height: 24px; vertical-align: middle;"/>.</div>
                     <video class="tutorial-video" onloadeddata="this.play().catch((e) => {})" loop muted playsinline controls>
-                        <source src="demo-mouse-an.mp4" type="video/mp4">
+                        <source src="/demo-mouse-an.mp4" type="video/mp4">
                         Your browser does not support the video tag.
                     </video>
                 </div>
                 <div class="tutorial-touch" style="display: none;">
                     <div style="margin-bottom: 5px;">1. Touch and drag on the <b>background</b> to move and rotate the cube.</div>
                     <div style="margin-bottom: 5px;">2. Touch and drag on the <b>cube</b> to interact with the data.</div>
-                    <div style="margin-bottom: 5px;">3. Select different data <img src="data-management.svg" style="width: 24px; height: 24px; vertical-align: middle;"/>, play an animation <img src="play.svg" style="width: 24px; height: 24px; vertical-align: middle;"/>, print your own cube <img src="download-print-template.svg" style="width: 24px; height: 24px; vertical-align: middle;"/>, or explore voxel mode <img src="enable-volume-viz.svg" style="width: 24px; height: 24px; vertical-align: middle;"/>.</div>
+                    <div style="margin-bottom: 5px;">3. Select different data <img src="/data-management.svg" style="width: 24px; height: 24px; vertical-align: middle;"/>, play an animation <img src="/play.svg" style="width: 24px; height: 24px; vertical-align: middle;"/>, print your own cube <img src="/download-print-template.svg" style="width: 24px; height: 24px; vertical-align: middle;"/>, or explore voxel mode <img src="/enable-volume-viz.svg" style="width: 24px; height: 24px; vertical-align: middle;"/>.</div>
                     <video class="tutorial-video" onloadeddata="this.play().catch((e) => {})" loop muted playsinline controls>
-                        <source src="demo-touch-an.mp4" type="video/mp4">
+                        <source src="/demo-touch-an.mp4" type="video/mp4">
                         Your browser does not support the video tag.
                     </video>
                 </div>
@@ -384,7 +383,7 @@
             <div class="print-template-loading-section flex-col-center noselect" style="padding: 20px;">
                 <div class="logo">
                     <video class="print-template-loader-video" playsinline loop muted>
-                        <source src="loader.mp4" type="video/mp4">
+                        <source src="/loader.mp4" type="video/mp4">
                     </video>
                 </div>
                 <div>Building your own data cube...</div>

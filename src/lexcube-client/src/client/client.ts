@@ -16,6 +16,7 @@
     along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
+import 'nouislider/dist/nouislider.css';
 import { CubeFace, DeviceOrientation } from './constants';
 import { CubeInteraction } from './interaction';
 import { Networking } from './networking';

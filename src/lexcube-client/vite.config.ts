@@ -1,0 +1,20 @@
+import { defineConfig } from 'vite'
+import path from 'path'
+
+export default defineConfig({
+  root: 'src/client',
+  publicDir: 'public',
+  assetsInclude: ['**/*.glb', '**/*.gltf'],
+  resolve: {
+    alias: {
+      three: path.resolve(__dirname, 'node_modules/three'),
+    },
+  },
+  server: {
+    port: 8080,
+  },
+  build: {
+    outDir: '../../dist/client',
+    emptyOutDir: true,
+  },
+})

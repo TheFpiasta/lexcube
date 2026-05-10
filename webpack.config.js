@@ -54,7 +54,7 @@ module.exports = [
    * the notebook.
    */
   {
-    entry: './src/extension.ts',
+    entry: ['./src/nbextension-public-path.ts', './src/extension.ts'], // note: order matters
     output: {
       filename: 'index.js',
       path: path.resolve(__dirname, 'lexcube', 'nbextension'),

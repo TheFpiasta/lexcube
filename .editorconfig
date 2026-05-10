@@ -1,0 +1,5 @@
+root = true
+
+[*.{ts,tsx}]
+ij_typescript_use_semicolon_after_statement = true
+ij_javascript_use_semicolon_after_statement = true
