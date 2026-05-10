@@ -18,7 +18,7 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="7cd8356a-28bc-4a14-9ce1-704b063cf7ce" name="Changes" comment="add ide files" />
+    <list default="true" id="7cd8356a-28bc-4a14-9ce1-704b063cf7ce" name="Changes" comment="fix: ide file" />
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
     <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
@@ -220,7 +220,15 @@
       <option name="project" value="LOCAL" />
       <updated>1778413034822</updated>
     </task>
-    <option name="localTasksCounter" value="10" />
+    <task id="LOCAL-00010" summary="fix: ide file">
+      <option name="closed" value="true" />
+      <created>1778413551465</created>
+      <option name="number" value="00010" />
+      <option name="presentableId" value="LOCAL-00010" />
+      <option name="project" value="LOCAL" />
+      <updated>1778413551465</updated>
+    </task>
+    <option name="localTasksCounter" value="11" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -243,7 +251,8 @@
     <MESSAGE value="fix: testing assets&#10;&#10;- Add conftest.py for customized pytest item collection and skipping logic based on dependencies and environment variables.&#10;- Introduce file-mock.ts and raw-mock.ts for file handling in tests.&#10;- Enhance jest configuration: add jsdom environment and setup files.&#10;- Add missing jest-environment-jsdom dependency" />
     <MESSAGE value="fix: add empty _data dir" />
     <MESSAGE value="add ide files" />
-    <option name="LAST_COMMIT_MESSAGE" value="add ide files" />
+    <MESSAGE value="fix: ide file" />
+    <option name="LAST_COMMIT_MESSAGE" value="fix: ide file" />
   </component>
   <component name="github-copilot-workspace">
     <instructionFileLocations>
