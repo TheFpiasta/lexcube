@@ -27,6 +27,7 @@ import shutil
 import struct
 import threading
 import time
+import traceback
 import bottleneck
 import re
 import warnings
@@ -738,29 +739,32 @@ class ParameterMetadataParser:
         
     def discover_metadata_for_parameter(self, existing_metadata: DiscoveredParameterMetadata, parameter: str | CompositeRgbParameter):
         parameter_name = parameter if type(parameter) == str else parameter.name
-        print(f"** parameter {parameter_name}")
-        first, last, minimum_value, maximum_value, median_of_1quantiles, median_of_99quantiles, resample_resolution = None, None, None, None, None, None, None
-        if existing_metadata:
-            first = existing_metadata.first_valid_time_slice
-            last = existing_metadata.last_valid_time_slice
-            minimum_value = existing_metadata.minimum_value
-            maximum_value = existing_metadata.maximum_value
-            median_of_1quantiles = existing_metadata.median_of_1quantiles
-            median_of_99quantiles = existing_metadata.median_of_99quantiles
-            min_max_approximate_only = existing_metadata.min_max_values_approximate_only
-            resample_resolution = existing_metadata.resample_resolution
-        parameter_data, _ = open_parameter_data(open_dataset(self.config, self.dataset_path), parameter)
-        if first == None or last == None:
-            (first, last) = self.find_first_and_last_slices(parameter_data)
-            print(f" - Detected first/last Z slice: {first} - {last}")
-        if (minimum_value == None or maximum_value == None or median_of_1quantiles == None or median_of_99quantiles == None) or (min_max_approximate_only and not self.min_max_values_approximate_only):
-            (minimum_value, maximum_value, median_of_1quantiles, median_of_99quantiles) = self.find_min_max_and_quantiles(parameter_data, self.dataset_id, parameter_name, first, last, self.min_max_values_approximate_only)
-            min_max_approximate_only = self.min_max_values_approximate_only
-            print(f" - Detected min/max: {minimum_value} - {maximum_value} Median 1%: {median_of_1quantiles} Median 99%: {median_of_99quantiles}")
-        if resample_resolution == None:
-            resample_resolution = self.detect_resample_resolution(parameter_data, self.dataset_id, parameter, first)
-            print(f" - Detected resolution {resample_resolution}")
-        return DiscoveredParameterMetadata(parameter_name, int(first), int(last), minimum_value, maximum_value, median_of_1quantiles, median_of_99quantiles, int(resample_resolution), min_max_approximate_only)
+        try:
+            print(f"** parameter {parameter_name}")
+            first, last, minimum_value, maximum_value, median_of_1quantiles, median_of_99quantiles, resample_resolution = None, None, None, None, None, None, None
+            if existing_metadata:
+                first = existing_metadata.first_valid_time_slice
+                last = existing_metadata.last_valid_time_slice
+                minimum_value = existing_metadata.minimum_value
+                maximum_value = existing_metadata.maximum_value
+                median_of_1quantiles = existing_metadata.median_of_1quantiles
+                median_of_99quantiles = existing_metadata.median_of_99quantiles
+                min_max_approximate_only = existing_metadata.min_max_values_approximate_only
+                resample_resolution = existing_metadata.resample_resolution
+            parameter_data, _ = open_parameter_data(open_dataset(self.config, self.dataset_path), parameter)
+            if first == None or last == None:
+                (first, last) = self.find_first_and_last_slices(parameter_data)
+                print(f" - Detected first/last Z slice: {first} - {last}")
+            if (minimum_value == None or maximum_value == None or median_of_1quantiles == None or median_of_99quantiles == None) or (min_max_approximate_only and not self.min_max_values_approximate_only):
+                (minimum_value, maximum_value, median_of_1quantiles, median_of_99quantiles) = self.find_min_max_and_quantiles(parameter_data, self.dataset_id, parameter_name, first, last, self.min_max_values_approximate_only)
+                min_max_approximate_only = self.min_max_values_approximate_only
+                print(f" - Detected min/max: {minimum_value} - {maximum_value} Median 1%: {median_of_1quantiles} Median 99%: {median_of_99quantiles}")
+            if resample_resolution == None:
+                resample_resolution = self.detect_resample_resolution(parameter_data, self.dataset_id, parameter, first)
+                print(f" - Detected resolution {resample_resolution}")
+            return DiscoveredParameterMetadata(parameter_name, int(first), int(last), minimum_value, maximum_value, median_of_1quantiles, median_of_99quantiles, int(resample_resolution), min_max_approximate_only)
+        except Exception as e:
+            raise RuntimeError(f"Metadata discovery failed for parameter '{parameter_name}' in dataset '{self.dataset_id}': {type(e).__name__}: {e}\n{traceback.format_exc()}")
 
     def test_resample_resolution(self, data: np.ndarray, blocksize: int):
         # we would expect at least 4 blocks in each direction to make a meaningful test
@@ -1739,10 +1743,15 @@ class TileServer:
         threads = self.config.pre_generation_threads
         print(f"* Discover metadata for dataset {dataset.id} (using {threads} threads)")
         metadata = {}
-        with multiprocessing.get_context("spawn").Pool(threads) as pool:
-            metadatas = pool.starmap(ParameterMetadataParser(self.config, dataset.min_max_values_approximate_only, dataset.dataset_config.dataset_path, dataset.id).discover_metadata_for_parameter, [(dataset.parameter_metadata.get(p), p) for p in dataset.real_parameters + dataset.composite_rgb_parameters])
-            for m in metadatas:
-                metadata[m.name] = m.to_dict()
+        parser = ParameterMetadataParser(self.config, dataset.min_max_values_approximate_only, dataset.dataset_config.dataset_path, dataset.id)
+        metadata_tasks = [(dataset.parameter_metadata.get(p), p) for p in dataset.real_parameters + dataset.composite_rgb_parameters]
+        if threads <= 1:
+            metadatas = [parser.discover_metadata_for_parameter(existing_metadata, parameter) for existing_metadata, parameter in metadata_tasks]
+        else:
+            with multiprocessing.get_context("spawn").Pool(threads) as pool:
+                metadatas = pool.starmap(parser.discover_metadata_for_parameter, metadata_tasks)
+        for m in metadatas:
+            metadata[m.name] = m.to_dict()
         metadata_file_path = os.path.join(self.config.tile_cache_directory, f"discovered_metadata-{dataset.id}.json")
         with open(metadata_file_path, "w") as f:
             json.dump(metadata, f)

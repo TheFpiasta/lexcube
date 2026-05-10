@@ -8,7 +8,7 @@ Create a dev environment:
 
 ```bash
 # Using VENV only (if Node and Python are already installed)
-npm i
+yarn install
 python -m venv .venv
 .\\.venv\\Scripts\\activate # or your OS-equivalent
 pip install jupyterlab
@@ -31,7 +31,7 @@ notebook / lab frontend. For lab, this is done by the command:
 
 ```bash
 jupyter labextension develop --overwrite .
-npm run build
+yarn build
 ```
 
 For classic notebook, you need to run:
@@ -51,7 +51,7 @@ terminals to watch for changes in the extension's source and automatically rebui
 
 ```bash
 # Watch the source directory in one terminal, automatically rebuilding when needed
-npm run watch
+yarn watch
 # Run JupyterLab in another terminal
 jupyter lab
 ```
@@ -73,7 +73,7 @@ tbump <new-version>
 
 ## Building a new version 
 ```bash
-npm run build:prod
+yarn build:prod
 py -m pip install --upgrade build twine pkginfo
 py -m build
 ```
