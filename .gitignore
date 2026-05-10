@@ -61,10 +61,8 @@ instance/
 
 # Sphinx documentation
 docs/_build/
-docs/source/_static/embed-bundle.js
-docs/source/_static/embed-bundle.js.map
-docs/source/_static/*.embed-bundle.js
-docs/source/_static/*.embed-bundle.js.map
+docs/source/_static/*
+!docs/source/_static/helper.js
 
 # PyBuilder
 target/
@@ -152,7 +150,6 @@ lexcube/nbextension/*.index.*
 
 **/.tiles/
 **/.venv/
-**/node_modules/
 **/build/
 **/.ipynb_checkpoints/
 **/__pycache__/
@@ -174,3 +171,5 @@ docs/source/**/*.svg
 lexcube/nbextension/**/*.svg
 lexcube/**/*.png
 docs/**/*.png
+/*.ipynb
+config.json
