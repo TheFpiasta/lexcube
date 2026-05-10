@@ -80,6 +80,7 @@
     "html-to-image": "^1.11.11",
     "identity-obj-proxy": "^3.0.0",
     "jest": "^29.1.2",
+    "jest-environment-jsdom": "^29.7.0",
     "mkdirp": "^0.5.1",
     "modern-gif": "^2.0.4",
     "mp4-muxer": "^5.1.5",
