@@ -155,7 +155,7 @@ pip install -r lexcube/lexcube_server/requirements-standalone.txt
 pip install "numcodecs<0.13"
 
 # Create your config.json from the provided example
-cp lexcube/lexcube_server/config_example.json config.json
+cp config.example.json config.json
 ```
 
 Edit `config.json` in the project root. Datasets can be loaded from a **remote URL** or a **local path**:
