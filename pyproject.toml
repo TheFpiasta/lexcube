@@ -104,6 +104,7 @@ dependencies = [
 [tool.hatch.build.hooks.jupyter-builder.build-kwargs]
 path = "."
 build_cmd = "build:prod"
+npm = ["yarn"]
 
 [tool.tbump]
 # Uncomment this if your project is hosted on GitHub:

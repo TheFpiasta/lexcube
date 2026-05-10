@@ -1,8 +1,12 @@
 # Development Setup (Linux, Windows)
 
-> For LexCube Version 2.0.0
+> For LexCube Version 2.0.0; Version 1.0.4 is similar
 
-**Preconditions:** Linux, Python 3.12+ (recommend) with pip, Node.js 24+ (recommend) with npm or yarn. On Windows, Git Bash or a similar terminal is recommended.
+**Preconditions:** 
+- Linux or Windows (others not tested), 
+- [Python 3.13+](https://www.python.org/downloads/) (older not tested) with pip, 
+- [Node.js 24+](https://nodejs.org/en/download) (older versions not tested) with [yarn](https://yarnpkg.com/getting-started/install).
+- On Windows, [Git Bash](https://git-scm.com/install/windows) or a similar terminal is recommended.
 
 > **Windows note:** 
 > JupyterLab's development mode uses symlinks. 
@@ -15,10 +19,10 @@
 
 ```bash
 # Install root Jupyter extension dependencies
-npm install
+yarn install
 
 # Install standalone web client dependencies (separate npm project)
-cd src/lexcube-client && npm install && cd ../..
+cd src/lexcube-client && yarn install && cd ../..
 
 # Create and activate Python virtual environment
 # sudo apt install python-is-python3  # if u dont want to allways type in python3
@@ -46,7 +50,7 @@ jupyter labextension develop --overwrite .
 jupyter labextension list # should show lexcube extension enabled
 
 # build the project
-npm run build
+yarn build
 ```
 
 **Development workflow** (two terminals, both with venv active):
@@ -55,7 +59,7 @@ npm run build
 # Terminal 1: activate venv, then watch TypeScript/webpack
 source .venv/bin/activate
 # source .venv/Scripts/activate  # Windows
-npm run watch
+yarn watch
 
 # Terminal 2: activate venv, then run JupyterLab
 source .venv/bin/activate
@@ -106,7 +110,7 @@ jupyter nbextension enable --sys-prefix --py lexcube
 # Terminal 1: activate venv, then watch TypeScript/webpack
 source .venv/bin/activate
 # source .venv/Scripts/activate  # Windows
-npm run watch
+yarn watch
 
 # Terminal 2: activate venv, then run classic notebook
 source .venv/bin/activate
@@ -207,7 +211,7 @@ source .venv/bin/activate
 python lexcube/lexcube_server/src/lexcube_standalone.py
 
 # Terminal 2: webpack dev server with hot reload (no venv needed)
-cd src/lexcube-client && npm run dev
+cd src/lexcube-client && yarn dev
 ```
 
 Open **http://localhost:8080** in a browser.
@@ -223,6 +227,6 @@ NOTE: CURRENTLY ALL TESTS ARE DEPRICATED AND NOT MAINTAINED. THEY MAY FAIL OR BE
 ```bash
 pytest                                                      # all Python tests
 pytest lexcube/tests/test_example.py::test_name -v         # single Python test
-npm run test                                                # all TypeScript tests (Jest)
-npm run test -- src/__tests__/index.spec.ts                 # single TypeScript test file
+yarn test                                                # all TypeScript tests (Jest)
+yarn test -- src/__tests__/index.spec.ts                 # single TypeScript test file
 ```

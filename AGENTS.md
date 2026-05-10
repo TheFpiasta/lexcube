@@ -8,17 +8,17 @@
 - Standalone backend server entrypoint is `lexcube/lexcube_server/src/lexcube_standalone.py` (FastAPI + socket.io).
 
 ## Setup and Install
-- Install JS deps in both projects: `npm install` (repo root) and `npm install --prefix src/lexcube-client`.
+- Install JS deps in both projects: `yarn install` (repo root) and `yarn --cwd src/lexcube-client install`.
 - Use a local venv for Python work: `python -m venv .venv && source .venv/bin/activate`.
 - Install editable package with extras: `pip install -e ".[test,examples]"`.
 - The Hatch Jupyter build hook in `pyproject.toml` runs `build:prod` during package builds; expect JS build side effects when installing/building Python package.
 
 ## High-Value Commands
-- Root build chain: `npm run build` (client -> TS lib -> nbextension -> labextension dev build).
-- Production packaging build: `npm run build:prod`.
-- Lint check only: `npm run lint:check`.
-- Lint with autofix: `npm run lint`.
-- TS tests: `npm run test` or single file `npm run test -- src/__tests__/index.spec.ts`.
+- Root build chain: `yarn build` (client -> TS lib -> nbextension -> labextension dev build).
+- Production packaging build: `yarn build:prod`.
+- Lint check only: `yarn lint:check`.
+- Lint with autofix: `yarn lint`.
+- TS tests: `yarn test` or single file `yarn test -- src/__tests__/index.spec.ts`.
 - Python tests: `pytest` (configured by `pytest.ini` to include notebooks via `--nbval --current-env`; slower and environment-sensitive).
 
 ## Test and Build Gotchas
@@ -29,7 +29,7 @@
 ## Standalone Web Mode
 - `lexcube_standalone.py` reads `config.json` from the current working directory (run from repo root unless you intentionally use another config location).
 - Standalone backend: `python lexcube/lexcube_server/src/lexcube_standalone.py` (port 5000).
-- Standalone frontend dev server: `npm run dev --prefix src/lexcube-client` (Vite port 8080, root `src/lexcube-client/src/client`).
+- Standalone frontend dev server: `yarn --cwd src/lexcube-client dev` (Vite port 8080, root `src/lexcube-client/src/client`).
 - For standalone backend dependencies, install both `lexcube/lexcube_server/requirements-core.txt` and `lexcube/lexcube_server/requirements-standalone.txt`.
 
 ## Conventions That Matter
