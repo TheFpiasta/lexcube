@@ -8,7 +8,7 @@
 
 ## Goal
 
-Add the supporting files needed for the standalone web server. After this, the file infrastructure is in place for the standalone server feature (issue 007).
+Add the supporting files needed for the standalone web server. After this, the file infrastructure is in place for the standalone server feature.
 
 ## What To Do
 
@@ -20,7 +20,7 @@ Add the supporting files needed for the standalone web server. After this, the f
 - Create `lexcube/lexcube_server/config_example.json` adapted for V2's schema:
     - All fields from `ServerConfig.read_from_config_file()` and `DatasetConfig.__init__()`
     - V2-specific: `target3dTileFormats`, `preGenerationSparsity2dTiles`, tile cache directory
-    - Caching fields: `enabledCachingStrategies`, `maxCacheGb` (for issue 005)
+    - Caching fields: dont include`enabledCachingStrategies`, `maxCacheGb` (for issue 005). use the current cashing strategy
     - 1-2 example dataset entries
 - Update `.gitignore` if needed for standalone server configs/data
 

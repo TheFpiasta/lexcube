@@ -11,7 +11,7 @@
 
 Create the web server process that bridges the client to V2's TileServer. Without this, the web app cannot run. V2 already has `startup_standalone()`, `handle_tile_request_standalone()`, and `handle_event_request_standalone()` - this wires them to HTTP/WebSocket endpoints.
 
-This is the basic server. Features like caching (issue 006) and cancel (issue 007) will adjust the server later.
+This is the basic server. Features like caching (issue 007) and cancel (issue 008) will adjust the server later.
 
 ## What To Do
 
