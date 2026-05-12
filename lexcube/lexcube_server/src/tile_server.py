@@ -21,6 +21,7 @@ import enum
 import gc
 from hashlib import sha512
 import json
+import logging
 import math
 import os
 import shutil
@@ -51,6 +52,8 @@ import psutil
 import xarray as xr
 from dask.cache import Cache
 from typing import Union
+
+logger = logging.getLogger("lexcube")
 
 UNCOMPRESSED_SUFFIX = "_uncompressed"
 ANOMALY_PARAMETER_ID_SUFFIX = "_lxc_anomaly"
@@ -601,6 +604,205 @@ class CompositeRgbParameter:
         
         self.meta_data = merged_metadata
 
+DISK_CACHE_SUBDIR = ".tiles"
+DISK_CACHE_VERSION = "v1"
+DISK_CACHE_SIZE_REFRESH_INTERVAL = 100
+DEFAULT_CACHE_LOCAL_MAX_GB = 10.0
+DEFAULT_CACHE_LOCAL_DIR = os.path.join(os.path.expanduser("~"), ".cache", "lexcube")
+
+
+class DatasetCacheConfig:
+    def __init__(self, cache_dict: dict) -> None:
+        memory = cache_dict.get("memory", {})
+        local = cache_dict.get("local", {})
+        pre_gen = local.get("preGeneration", {})
+        self.memory_enabled: bool = bool(memory.get("enabled", True))
+        self.local_enabled: bool = bool(local.get("enabled", False))
+        self.local_max_cache_gb: float = float(local.get("maxCacheGb", DEFAULT_CACHE_LOCAL_MAX_GB))
+        self.pre_generation_offset_2d: int = int(pre_gen.get("offset2d", 0))
+        self.pre_generation_offset_3d: int = int(pre_gen.get("offset3d", 0))
+        self.pre_generation_all_lods_2d: bool = bool(pre_gen.get("allLods2d", True))
+        self.pre_generation_all_lods_3d: bool = bool(pre_gen.get("allLods3d", False))
+
+
+class TileDiskCache:
+    def __init__(self, cache_root_dir: str, dataset_id: str, max_cache_gb: float = DEFAULT_CACHE_LOCAL_MAX_GB) -> None:
+        self._tiles_dir = os.path.join(cache_root_dir, DISK_CACHE_SUBDIR, DISK_CACHE_VERSION)
+        self._dataset_id = dataset_id
+        self._max_cache_bytes = int(max_cache_gb * 1024 ** 3)
+        self._write_count = 0
+        self._estimated_size_bytes = 0
+        self._over_limit = False
+
+    def _path_2d(self, parameter: str, compression: str, dim_name: str, tile: "Tile2D") -> str:
+        return os.path.join(
+            self._tiles_dir, self._dataset_id, parameter, "2d", compression, dim_name,
+            f"{tile.index_value}.{tile.lod}.{tile.tx}.{tile.ty}",
+        )
+
+    def _path_3d(self, parameter: str, compression: str, tile: "Tile3D") -> str:
+        return os.path.join(
+            self._tiles_dir, self._dataset_id, parameter, "3d", compression,
+            f"{tile.lod}.{tile.tz}.{tile.tx}.{tile.ty}",
+        )
+
+    def tile_2d_exists(self, parameter: str, compression: str, dim_name: str, tile: "Tile2D") -> bool:
+        return os.path.exists(self._path_2d(parameter, compression, dim_name, tile))
+
+    def read_tile_2d(self, parameter: str, compression: str, dim_name: str, tile: "Tile2D") -> bytes:
+        with open(self._path_2d(parameter, compression, dim_name, tile), "rb") as f:
+            return f.read()
+
+    def write_tile_2d(self, parameter: str, compression: str, dim_name: str, tile: "Tile2D", data: bytes) -> None:
+        if self._over_limit:
+            return
+        path = self._path_2d(parameter, compression, dim_name, tile)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "wb") as f:
+            f.write(data)
+        self._on_write(len(data))
+
+    def tile_3d_exists(self, parameter: str, compression: str, tile: "Tile3D") -> bool:
+        return os.path.exists(self._path_3d(parameter, compression, tile))
+
+    def read_tile_3d(self, parameter: str, compression: str, tile: "Tile3D") -> bytes:
+        with open(self._path_3d(parameter, compression, tile), "rb") as f:
+            return f.read()
+
+    def write_tile_3d(self, parameter: str, compression: str, tile: "Tile3D", data: bytes) -> None:
+        if self._over_limit:
+            return
+        path = self._path_3d(parameter, compression, tile)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "wb") as f:
+            f.write(data)
+        self._on_write(len(data))
+
+    def _on_write(self, byte_count: int) -> None:
+        self._write_count += 1
+        self._estimated_size_bytes += byte_count
+        if self._write_count % DISK_CACHE_SIZE_REFRESH_INTERVAL == 0:
+            self._refresh_size()
+
+    def _refresh_size(self) -> None:
+        dataset_dir = os.path.join(self._tiles_dir, self._dataset_id)
+        total = 0
+        if os.path.exists(dataset_dir):
+            for dirpath, _, filenames in os.walk(dataset_dir):
+                for fname in filenames:
+                    try:
+                        total += os.path.getsize(os.path.join(dirpath, fname))
+                    except OSError:
+                        pass
+        self._estimated_size_bytes = total
+        self._over_limit = total >= self._max_cache_bytes
+        if self._over_limit:
+            print(f"[TileDiskCache] Cache limit reached for '{self._dataset_id}' "
+                  f"({total / 1024**3:.2f} GB / {self._max_cache_bytes / 1024**3:.2f} GB). Writes paused.")
+
+
+class PreGenerationTask:
+    __slots__ = ("label", "cache_check", "generate", "_asyncio_task")
+
+    def __init__(self, label: str, cache_check: Callable[[], bool], generate: Callable) -> None:
+        self.label = label
+        self.cache_check = cache_check
+        self.generate = generate
+        self._asyncio_task: asyncio.Task | None = None
+
+
+class BackgroundGenerationManager:
+    def __init__(self, max_parallel: int = DEFAULT_PRE_GENERATION_THREADS) -> None:
+        self._max_parallel = max_parallel
+        self._scheduled: list[PreGenerationTask] = []
+        self._running: list[PreGenerationTask] = []
+        self._done: list[PreGenerationTask] = []
+        self._cancelled = False
+        self._scheduler_future: asyncio.Task | None = None
+
+    def schedule(self, candidates: list[PreGenerationTask]) -> None:
+        new_count = 0
+        hit_count = 0
+        for c in candidates:
+            if c.cache_check():
+                hit_count += 1
+            else:
+                self._scheduled.append(c)
+                new_count += 1
+        logger.debug(
+            "[BGM] schedule(): +%d queued, %d cache hits | scheduled=%d running=%d done=%d",
+            new_count, hit_count,
+            len(self._scheduled), len(self._running), len(self._done),
+        )
+        if new_count > 0:
+            self._ensure_scheduler_running()
+
+    def cancel(self) -> None:
+        n_sched = len(self._scheduled)
+        n_run = len(self._running)
+        self._cancelled = True
+        for task in list(self._running):
+            if task._asyncio_task and not task._asyncio_task.done():
+                task._asyncio_task.cancel()
+        self._scheduled.clear()
+        self._running.clear()
+        self._done.clear()
+        logger.debug(
+            "[BGM] cancel(): cleared %d scheduled + %d running -> all lists empty",
+            n_sched, n_run,
+        )
+
+    def _ensure_scheduler_running(self) -> None:
+        if self._scheduler_future is None or self._scheduler_future.done():
+            self._cancelled = False
+            self._scheduler_future = asyncio.ensure_future(self._run_scheduler())
+
+    async def _run_scheduler(self) -> None:
+        logger.debug(
+            "[BGM] Scheduler started | scheduled=%d max_parallel=%d",
+            len(self._scheduled), self._max_parallel,
+        )
+        status_logger = asyncio.ensure_future(self._log_status_periodically())
+        try:
+            while not self._cancelled and (self._scheduled or self._running):
+                while not self._cancelled and self._scheduled and len(self._running) < self._max_parallel:
+                    task = self._scheduled.pop(0)
+                    task._asyncio_task = asyncio.ensure_future(self._run_single(task))
+                    self._running.append(task)
+                if self._running and not self._cancelled:
+                    active = [t._asyncio_task for t in self._running if t._asyncio_task is not None]
+                    if active:
+                        await asyncio.wait(active, return_when=asyncio.FIRST_COMPLETED)
+                if not self._cancelled:
+                    completed = [t for t in self._running if t._asyncio_task is not None and t._asyncio_task.done()]
+                    for t in completed:
+                        self._running.remove(t)
+                        self._done.append(t)
+        finally:
+            status_logger.cancel()
+            logger.debug(
+                "[BGM] Scheduler stopped | scheduled=%d running=%d done=%d",
+                len(self._scheduled), len(self._running), len(self._done),
+            )
+
+    async def _log_status_periodically(self) -> None:
+        while True:
+            await asyncio.sleep(10)
+            logger.debug(
+                "[BGM] Status | scheduled=%d running=%d done=%d",
+                len(self._scheduled), len(self._running), len(self._done),
+            )
+
+    async def _run_single(self, task: PreGenerationTask) -> None:
+        try:
+            await task.generate()
+        except asyncio.CancelledError:
+            logger.debug("[BGM] Cancelled: %s", task.label)
+            raise
+        except Exception as e:
+            logger.warning("[BGM] Failed: %s -> %s", task.label, e)
+
+
 class DatasetConfig:
     def __init__(self, dataset_config: dict) -> None:
         self.id = str(dataset_config["id"])
@@ -622,6 +824,7 @@ class DatasetConfig:
         self.allow_data_downloads = bool(dataset_config.get("allowDataDownloads") or False)
         self.rgb_parameters: list[CompositeRgbParameter] = [CompositeRgbParameter(rgb) for rgb in dataset_config.get("rgbParameters", [])]
         self.allow_float64_in_compressed_tiles = bool(dataset_config.get("allowFloat64") or False)
+        self.cache_config = DatasetCacheConfig(dataset_config.get("cache", {}))
 
 
 def get_dimension_type(dimension_name: str):
@@ -1006,6 +1209,7 @@ class Dataset:
         result["3d_tile_formats"] = self.target_3d_tile_formats
         result["sparsity"] = self.pre_generation_sparsity_2d_tiles
         result["allow_data_downloads"] = self.allow_data_downloads
+        result["cache_memory_enabled"] = self.dataset_config.cache_config.memory_enabled
         return result
 
     def get_parameters_from_meta_data(self):
@@ -1161,23 +1365,23 @@ class TileDiskStorage:
                 destination = os.path.join(self.directory_2d_tiles, dataset.id, param, new_name)
                 shutil.move(source, destination)
         
-    def get_tile_path(self, tile: Union[Tile2D, Tile3D]):
+    def get_tile_path(self, tile: Union[Tile2D, Tile3D], compression: str = TILE_FORMAT_ZFP):
         if type(tile) == Tile2D:
-            return self.get_tile_2d_path(tile)
-        return self.get_tile_3d_path(tile)
+            return self.get_tile_2d_path(tile, compression)
+        return self.get_tile_3d_path(tile, compression)
     
     def get_block_file_2d_path(self, dataset: Dataset, parameter: str, index_dimension: Dimension, indexValue: int):
         return os.path.join(self.directory_2d_tiles, dataset.id, parameter, dataset.get_dimension_name(index_dimension), f"{indexValue}")
 
-    def get_tile_2d_path(self, tile: Tile2D):
-        return os.path.join(self.directory_2d_tiles, tile.dataset_id, tile.parameter, self.datasets[tile.dataset_id].get_dimension_name(tile.index_dimension), f"{tile.index_value}.{tile.lod}.{tile.tx}.{tile.ty}.tile2d")
+    def get_tile_2d_path(self, tile: Tile2D, compression: str = TILE_FORMAT_ZFP):
+        return os.path.join(self.directory_2d_tiles, tile.dataset_id, tile.parameter, compression, self.datasets[tile.dataset_id].get_dimension_name(tile.index_dimension), f"{tile.index_value}.{tile.lod}.{tile.tx}.{tile.ty}.tile2d")
     
     def get_block_file_3d_path(self, dataset: Dataset, parameter: str, lod: int, tileZ: int, tile_format: str):
         extension = TILE_3D_FORMAT_TO_FILE_EXTENSION.get(tile_format)
         return os.path.join(self.directory_3d_tiles, dataset.id, parameter, f"{lod}.{tileZ}.block3d{extension}")
 
-    def get_tile_3d_path(self, tile: Tile3D):
-        return os.path.join(self.directory_3d_tiles, tile.dataset_id, tile.parameter, f"{tile.lod}.{tile.tx}.{tile.ty}.{tile.tz}.tile3d")
+    def get_tile_3d_path(self, tile: Tile3D, compression: str = TILE_FORMAT_ZFP):
+        return os.path.join(self.directory_3d_tiles, tile.dataset_id, tile.parameter, compression, f"{tile.lod}.{tile.tx}.{tile.ty}.{tile.tz}.tile3d")
     
     def get_event_data_path(self, dataset_id: str, parameter: str, event_type: str):
         return os.path.join(self.directory_3d_tiles, dataset_id, parameter, "extreme_events", f"events_{parameter}_{event_type}_minified.bin")
@@ -1606,8 +1810,7 @@ class TileGenerationCache:
         self.cache = {}
 
     def get_tile_path(self, tile: Union[Tile2D, Tile3D]):
-        extension = TILE_3D_FORMAT_TO_FILE_EXTENSION.get(self.tile_format, "") if type(tile) == Tile3D else ""
-        return self.tile_disk_storage.get_tile_path(tile) + extension
+        return self.tile_disk_storage.get_tile_path(tile, self.tile_format)
 
     def tile_exists(self, tile: Union[Tile2D, Tile3D]):
         if self.save_on_disk:
@@ -1682,6 +1885,11 @@ class TileServer:
         self.request_progress = {}
         self.download_tasks = {}
         self.next_download_task_id = 0
+        self.dataset_tile_disk_caches: dict[str, TileDiskCache] = {}
+        self.background_gen_manager = BackgroundGenerationManager()
+        self.widget_cache_config = DatasetCacheConfig({})
+        self._pregen_store: list = []
+        self._dispatcher_task: asyncio.Task | None = None
     
 
     def update_progress(self, request_group_id: int, request_id: int, done: int, total: int = -1):
@@ -1698,7 +1906,15 @@ class TileServer:
             total = sum(c[1] for c in current.values())
             self.widget_update_progress([done, total])
 
-    def startup_widget(self, data_source: Union[xr.DataArray, np.ndarray], use_lexcube_chunk_caching: bool):
+    def startup_widget(self, data_source: Union[xr.DataArray, np.ndarray], use_lexcube_chunk_caching: bool,
+                       cache_memory_enabled: bool = True,
+                       cache_local_enabled: bool = True,
+                       cache_local_dir: str = "",
+                       cache_local_max_cache_gb: float = DEFAULT_CACHE_LOCAL_MAX_GB,
+                       cache_local_pre_generation_offset_2d: int = 0,
+                       cache_local_pre_generation_offset_3d: int = 0,
+                       cache_local_pre_generation_all_lods_2d: bool = True,
+                       cache_local_pre_generation_all_lods_3d: bool = False):
         if type(data_source) == xr.DataArray and not data_source.chunks:
             print("Xarray input object does not have chunks. You can re-open with 'chunks={}' to enable dask for caching and progress reporting functionality - but may be overall slower for small data sets.")
         dask_cache = Cache(2e9)  # Leverage two gigabytes of memory
@@ -1709,6 +1925,34 @@ class TileServer:
         self.guessed_data_type_from_widget_data_source = DataType.RGB if len(self.data_source.shape) == 4 else DataType.Float
         self.tile_memory_cache = TileMemoryCache()
         self.use_data_source_proxy = use_lexcube_chunk_caching
+
+        self.widget_cache_config = DatasetCacheConfig({
+            "memory": {"enabled": cache_memory_enabled},
+            "local": {
+                "enabled": cache_local_enabled,
+                "maxCacheGb": cache_local_max_cache_gb,
+                "preGeneration": {
+                    "offset2d": cache_local_pre_generation_offset_2d,
+                    "offset3d": cache_local_pre_generation_offset_3d,
+                    "allLods2d": cache_local_pre_generation_all_lods_2d,
+                    "allLods3d": cache_local_pre_generation_all_lods_3d,
+                },
+            },
+        })
+
+        if cache_local_enabled:
+            resolved_dir = cache_local_dir or DEFAULT_CACHE_LOCAL_DIR
+            try:
+                os.makedirs(resolved_dir, exist_ok=True)
+                self.dataset_tile_disk_caches["default"] = TileDiskCache(resolved_dir, "default", cache_local_max_cache_gb)
+                print(f"[TileDiskCache] Widget disk cache enabled at: {resolved_dir}")
+            except Exception as e:
+                print(f"[TileDiskCache] Failed to initialise widget disk cache at '{resolved_dir}': {e}. Disk cache disabled.")
+
+        if type(data_source) == xr.DataArray and len(data_source.dims) == 3:
+            self.widget_dim_names = list(data_source.dims)
+        else:
+            self.widget_dim_names = ["z", "y", "x"]
 
     def startup_standalone(self):
         print("* Reading configuration (config.json)")
@@ -1731,7 +1975,16 @@ class TileServer:
             except:
                 pass
             self.discover_metadata_for_all_parameters(dataset)
-                
+            if dataset.dataset_config.cache_config.local_enabled:
+                try:
+                    self.dataset_tile_disk_caches[dataset.id] = TileDiskCache(
+                        self.config.tile_cache_directory,
+                        dataset.id,
+                        dataset.dataset_config.cache_config.local_max_cache_gb,
+                    )
+                    print(f"    * Disk cache enabled for '{dataset.id}' (max {dataset.dataset_config.cache_config.local_max_cache_gb} GB)")
+                except Exception as e:
+                    print(f"    * Failed to init disk cache for '{dataset.id}': {e}")
 
         self.delete_all_files_in_dataset_download_directory_without_active_tasks()
         
@@ -1818,30 +2071,47 @@ class TileServer:
         request_id = request["request_id"]
         request_group_id = request["request_group_id"]
         lod = request["lod"]
-        before = time.perf_counter()
 
         data = bytearray()
         sizes = []
         tiles_generated = 0
-        cache_hits = 0
-        # with self.register_progress(request_id, len(xys)):
+        memory_cache_hits = 0
+        disk_cache_hits = 0
         tile_type = request["tileType"]
-        
+        disk_cache = self.dataset_tile_disk_caches.get("default")
+        memory_enabled = self.widget_cache_config.memory_enabled
+        disk_enabled = self.widget_cache_config.local_enabled and disk_cache is not None
+        compression = self.tile_compressor.current_output_tile_format
+
+        index_dimension = None
+        index_value = None
+        xys = None
+        served_tiles = []
+
         if tile_type == "2d":
             xys = request["xys"]
             index_dimension = dimension_mapping[request["indexDimension"]]
             index_value = request["indexValue"]
+            dim_name = self.widget_dim_names[index_dimension.value]
             for xy in xys:
                 t = Tile2D(self.TILE_SIZE_2D, "", "", index_dimension, index_value, lod, xy[0], xy[1], data_type=self.guessed_data_type_from_widget_data_source)
-                tile_cached = self.tile_memory_cache.tile_exists(t)
-                if tile_cached:
-                    cache_hits += 1
+                served_tiles.append(t)
+                if memory_enabled and self.tile_memory_cache.tile_exists(t):
+                    memory_cache_hits += 1
                     d = self.tile_memory_cache.get_data(t)
+                elif disk_enabled and disk_cache is not None and disk_cache.tile_2d_exists(DEFAULT_VARIABLE_NAME, compression, dim_name, t):
+                    disk_cache_hits += 1
+                    d = disk_cache.read_tile_2d(DEFAULT_VARIABLE_NAME, compression, dim_name, t)
+                    if memory_enabled:
+                        self.tile_memory_cache.put_data(t, d)
                 else:
                     ds = self.data_source_proxy if self.use_data_source_proxy else self.data_source
                     d = t.generate_from_data(ds, self.tile_compressor, compressed_dtype=ds.dtype)
                     tiles_generated += 1
-                    self.tile_memory_cache.put_data(t, d)
+                    if memory_enabled:
+                        self.tile_memory_cache.put_data(t, d)
+                    if disk_enabled and disk_cache is not None:
+                        disk_cache.write_tile_2d(DEFAULT_VARIABLE_NAME, compression, dim_name, t, d)
                 data += d
                 sizes.append(len(d))
                 self.update_progress(request_group_id, request_id, len(sizes))
@@ -1849,22 +2119,35 @@ class TileServer:
             xyzs = request["xyzs"]
             for xyz in xyzs:
                 t = Tile3D(self.TILE_SIZE_3D, "", "", lod, xyz[0], xyz[1], xyz[2])
-                tile_cached = self.tile_memory_cache.tile_exists(t)
-                if tile_cached:
-                    cache_hits += 1
+                served_tiles.append(t)
+                if memory_enabled and self.tile_memory_cache.tile_exists(t):
+                    memory_cache_hits += 1
                     d = self.tile_memory_cache.get_data(t)
+                elif disk_enabled and disk_cache is not None and disk_cache.tile_3d_exists(DEFAULT_VARIABLE_NAME, compression, t):
+                    disk_cache_hits += 1
+                    d = disk_cache.read_tile_3d(DEFAULT_VARIABLE_NAME, compression, t)
+                    if memory_enabled:
+                        self.tile_memory_cache.put_data(t, d)
                 else:
                     ds = self.data_source_proxy if self.use_data_source_proxy else self.data_source
                     d = t.generate_and_compress_from_data(ds, self.tile_compressor, compressed_dtype=ds.dtype)
                     tiles_generated += 1
-                    self.tile_memory_cache.put_data(t, d)
+                    if memory_enabled:
+                        self.tile_memory_cache.put_data(t, d)
+                    if disk_enabled and disk_cache is not None:
+                        disk_cache.write_tile_3d(DEFAULT_VARIABLE_NAME, compression, t, d)
                 data += d
                 sizes.append(len(d))
                 self.update_progress(request_group_id, request_id, len(sizes))
-        time_took_secs = time.perf_counter() - before
-        # print(f"request {request_id}, index {index_dimension.name}, value {index_value}, lod {lod}, xys {xys} (cache hits: {cache_hits})")
-        # if tiles_generated > 0:
-        #     print(f"Finished generating tiles, took {round(time_took_secs * 1000)} milliseconds ({round(time_took_secs * 1000 / tiles_generated)} per tile)")
+
+        if tiles_generated > 0 or disk_cache_hits > 0:
+            print(f"[widget] tile_type={tile_type} lod={lod} generated={tiles_generated} mem_hits={memory_cache_hits} disk_hits={disk_cache_hits}")
+
+        self._pregen_store.append((
+            (None, DEFAULT_VARIABLE_NAME, index_dimension, index_value, lod, xys, self.widget_cache_config, disk_cache),
+            (None, DEFAULT_VARIABLE_NAME, lod, served_tiles, self.widget_cache_config, disk_cache),
+        ))
+
         return ({"response_type": "tile_data", "metadata": request, "dataSizes": sizes}, [bytes(data)])
             
     async def handle_tile_request_standalone(self, socketio, sender_id, request_data):
@@ -1875,9 +2158,17 @@ class TileServer:
         dataset = self.datasets.get(dataset_id)
         if not (dataset and parameter in self.datasets[dataset_id].all_valid_parameters):
             return print(f"Dataset id or parameter not found ({dataset_id} / {parameter})")
-        
+
+        cache_config = dataset.dataset_config.cache_config
+        disk_cache = self.dataset_tile_disk_caches.get(dataset_id)
+        disk_enabled = cache_config.local_enabled and disk_cache is not None
+        compression = self.tile_compressor.current_output_tile_format
+
         tiles = []
         blockfile = None
+        index_dimension = None
+        index_value = None
+        xys = None
         if tile_type == "2d":
             index_dimension = dimension_mapping[request_data["indexDimension"]]
             index_value = request_data["indexValue"]
@@ -1885,7 +2176,7 @@ class TileServer:
                 return print(f"Bad request for index value {index_value} in {index_dimension.name}")
             xys = request_data["xys"]
             for xy in xys:
-                tiles.append(Tile2D(self.TILE_SIZE_2D, dataset, parameter, index_dimension, index_value, lod, xy[0], xy[1]))
+                tiles.append(Tile2D(self.TILE_SIZE_2D, dataset_id, parameter, index_dimension, index_value, lod, xy[0], xy[1]))
             blockfile = BlockFile2D(self.tile_disk_storage, dataset, parameter, index_dimension, index_value)
         elif tile_type == "3d":
             xyzs = request_data["xyzs"]
@@ -1895,33 +2186,74 @@ class TileServer:
             if len(z_values) > 1:
                 return print(f"Request cannot be answered, multiple z values requested: {z_values}")
             for xyz in xyzs:
-                tiles.append(Tile3D(self.TILE_SIZE_3D, dataset, parameter, lod, xyz[0], xyz[1], xyz[2]))
+                tiles.append(Tile3D(self.TILE_SIZE_3D, dataset_id, parameter, lod, xyz[0], xyz[1], xyz[2]))
             blockfile = BlockFile3D(self.tile_disk_storage, dataset, parameter, lod, z_values[0], tile_format, index_mask_event_type=index_mask_event_type)
         else:
             return print(f"Invalid tile type {tile_type}")
-        
+
+        if tile_type == "2d":
+            request_label = f"{dataset_id}/{parameter} {index_dimension.name}={index_value} lod={lod}"
+        else:
+            request_label = f"{dataset_id}/{parameter} 3d tz={z_values[0]} lod={lod}"
+
         if blockfile and blockfile.exists():
             blockfile.load_header()
             (sizes, data) = blockfile.get_tile_data(tiles)
+            logger.info("  -> %s blockfile hit (%d tiles)", request_label, len(tiles))
             await socketio.emit("tile_data", { "metadata": request_data, "dataSizes": sizes, "data": bytes(data) }, to=sender_id)
+            self._maybe_schedule_pre_generation_2d(dataset, parameter, index_dimension, index_value, lod, xys, cache_config)
+            self._maybe_schedule_pre_generation_3d(dataset, parameter, lod, tiles, cache_config)
             return
+
+        if disk_enabled and tile_type == "2d" and index_dimension is not None:
+            assert disk_cache is not None
+            dim_name = dataset.get_dimension_name(index_dimension)
+            if all(disk_cache.tile_2d_exists(parameter, compression, dim_name, t) for t in tiles):
+                data = bytearray()
+                sizes = []
+                for t in tiles:
+                    d = disk_cache.read_tile_2d(parameter, compression, dim_name, t)
+                    data += d
+                    sizes.append(len(d))
+                logger.info("  -> %s 2d disk hit (%d tiles)", request_label, len(tiles))
+                await socketio.emit("tile_data", { "metadata": request_data, "dataSizes": sizes, "data": bytes(data) }, to=sender_id)
+                self._maybe_schedule_pre_generation_2d(dataset, parameter, index_dimension, index_value, lod, xys, cache_config)
+                return
+
+        if disk_enabled and tile_type == "3d":
+            assert disk_cache is not None
+            if all(disk_cache.tile_3d_exists(parameter, compression, t) for t in tiles):
+                data = bytearray()
+                sizes = []
+                for t in tiles:
+                    d = disk_cache.read_tile_3d(parameter, compression, t)
+                    data += d
+                    sizes.append(len(d))
+                logger.info("  -> %s 3d disk hit (%d tiles)", request_label, len(tiles))
+                await socketio.emit("tile_data", { "metadata": request_data, "dataSizes": sizes, "data": bytes(data) }, to=sender_id)
+                self._maybe_schedule_pre_generation_3d(dataset, parameter, lod, tiles, cache_config)
+                return
 
         is_anomaly = parameter.endswith(ANOMALY_PARAMETER_ID_SUFFIX)
         real_parameter = parameter[:-len(ANOMALY_PARAMETER_ID_SUFFIX)] if is_anomaly else parameter
         source_data, _ = open_parameter_data(dataset.ds, real_parameter)
 
+        logger.info("Generating %d tile(s) for [%s]", len(tiles), request_label)
+
         def generate_tiles():
-            data = bytearray()
-            sizes = []
+            gen_data = bytearray()
+            gen_sizes = []
+            total = len(tiles)
             for tile in tiles:
                 actual_tile = tile.get_anomaly_tile() if is_anomaly else tile
                 if tile_type == "2d":
                     d = actual_tile.generate_from_data(source_data, self.tile_compressor, compressed_dtype=source_data.dtype)
                 else:
                     d = actual_tile.generate_and_compress_from_data(source_data, self.tile_compressor, compressed_dtype=source_data.dtype)
-                data += d
-                sizes.append(len(d))
-            return (sizes, bytes(data))
+                gen_data += d
+                gen_sizes.append(len(d))
+                logger.debug("  -> %s foreground %d/%d", request_label, len(gen_sizes), total)
+            return (gen_sizes, bytes(gen_data))
 
         try:
             loop = asyncio.get_event_loop()
@@ -1930,7 +2262,200 @@ class TileServer:
             print(f"Tile generation failed: {e}", flush=True)
             return
 
+        if disk_enabled and tile_type == "2d" and index_dimension is not None:
+            assert disk_cache is not None
+            dim_name = dataset.get_dimension_name(index_dimension)
+            offset = 0
+            for i, tile in enumerate(tiles):
+                disk_cache.write_tile_2d(parameter, compression, dim_name, tile, data[offset:offset + sizes[i]])
+                offset += sizes[i]
+            logger.info("  -> %s wrote %d tile(s) to disk cache", request_label, len(tiles))
+        elif disk_enabled and tile_type == "3d":
+            assert disk_cache is not None
+            offset = 0
+            for i, tile in enumerate(tiles):
+                disk_cache.write_tile_3d(parameter, compression, tile, data[offset:offset + sizes[i]])
+                offset += sizes[i]
+            logger.info("  -> %s wrote %d tile(s) to disk cache", request_label, len(tiles))
+
         await socketio.emit("tile_data", { "metadata": request_data, "dataSizes": sizes, "data": data }, to=sender_id)
+        self._pregen_store.append((
+            (dataset, parameter, index_dimension, index_value, lod, xys, cache_config),
+            (dataset, parameter, lod, tiles, cache_config),
+        ))
+
+    def _cancel_dispatcher(self) -> None:
+        if self._dispatcher_task and not self._dispatcher_task.done():
+            self._dispatcher_task.cancel()
+            logger.debug("[Dispatcher] Cancelled")
+        self._dispatcher_task = None
+
+    def _start_dispatcher(self) -> None:
+        self._dispatcher_task = asyncio.ensure_future(self._run_dispatcher())
+
+    async def _run_dispatcher(self) -> None:
+        await asyncio.sleep(0.2)
+        logger.debug("[Dispatcher] Fired: scheduling pre-gen for %d face(s)", len(self._pregen_store))
+        for args_2d, args_3d in self._pregen_store:
+            if args_2d is not None:
+                self._maybe_schedule_pre_generation_2d(*args_2d)
+            if args_3d is not None:
+                self._maybe_schedule_pre_generation_3d(*args_3d)
+
+    def _maybe_schedule_pre_generation_2d(self, dataset, parameter: str,
+                                           index_dimension, index_value, lod: int,
+                                           xys, cache_config: "DatasetCacheConfig",
+                                           override_disk_cache: "TileDiskCache | None" = None) -> None:
+        disk_cache = override_disk_cache if dataset is None else self.dataset_tile_disk_caches.get(dataset.id)
+        if not (cache_config.local_enabled and disk_cache is not None):
+            return
+        if cache_config.pre_generation_offset_2d <= 0 or xys is None or index_dimension is None or index_value is None:
+            return
+
+        offset = cache_config.pre_generation_offset_2d
+        all_lods = cache_config.pre_generation_all_lods_2d
+        compression = self.tile_compressor.current_output_tile_format
+        compressor = self.tile_compressor
+        is_widget = dataset is None
+
+        if is_widget:
+            source_data = self.data_source_proxy if self.use_data_source_proxy else self.data_source
+            dim_name = self.widget_dim_names[index_dimension.value]
+            index_max = self.data_source.shape[index_dimension.value]
+            max_lod = calculate_max_lod(self.TILE_SIZE_2D, list(self.data_source.shape[:3]))
+            lods_to_gen = range(0, max_lod + 1) if all_lods else [lod]
+            dataset_id = ""
+            tile_parameter = DEFAULT_VARIABLE_NAME
+            sparsity = 1
+            is_anomaly = False
+            z_size, y_size, x_size = self.data_source.shape[:3]
+            tile_plane_width = x_size if index_dimension != Dimension.X else y_size
+            tile_plane_height = y_size if index_dimension == Dimension.Z else z_size
+        else:
+            is_anomaly = parameter.endswith(ANOMALY_PARAMETER_ID_SUFFIX)
+            real_parameter = parameter[:-len(ANOMALY_PARAMETER_ID_SUFFIX)] if is_anomaly else parameter
+            source_data, _ = open_parameter_data(dataset.ds, real_parameter)
+            dim_name = dataset.get_dimension_name(index_dimension)
+            index_max = [dataset.z_max, dataset.y_max, dataset.x_max][index_dimension.value]
+            lods_to_gen = range(0, dataset.max_lod_2d + 1) if all_lods else [lod]
+            dataset_id = dataset.id
+            tile_parameter = parameter
+            sparsity = dataset.pre_generation_sparsity_2d_tiles
+            tile_plane_width = dataset.x_max if index_dimension != Dimension.X else dataset.y_max
+            tile_plane_height = dataset.y_max if index_dimension == Dimension.Z else dataset.z_max
+
+        candidates: list[PreGenerationTask] = []
+        for delta in range(-offset, offset + 1):
+            if delta == 0:
+                continue
+            if is_widget:
+                iv = index_value + delta
+            else:
+                raw_iv = index_value + delta * sparsity
+                iv = (raw_iv // sparsity) * sparsity
+            if iv < 0 or iv >= index_max:
+                continue
+            for gen_lod in lods_to_gen:
+                lod_factor = pow(0.5, gen_lod)
+                max_tx = math.ceil(lod_factor * tile_plane_width / self.TILE_SIZE_2D)
+                max_ty = math.ceil(lod_factor * tile_plane_height / self.TILE_SIZE_2D)
+                for (tx, ty) in xys:
+                    if tx >= max_tx or ty >= max_ty:
+                        continue
+                    tile = Tile2D(self.TILE_SIZE_2D, dataset_id, tile_parameter, index_dimension, iv, gen_lod, tx, ty)
+                    actual_tile = tile.get_anomaly_tile() if is_anomaly else tile
+                    label = f"2d {'widget' if is_widget else dataset_id}/{tile_parameter} {index_dimension.name}={iv} lod={gen_lod} xy=({tx},{ty})"
+
+                    def make_generate(t=tile, at=actual_tile, s=source_data, dc=disk_cache, p=tile_parameter, c=compression, dn=dim_name, iw=is_widget, cmp=compressor):
+                        async def _gen():
+                            loop = asyncio.get_event_loop()
+                            d = await loop.run_in_executor(None, lambda: at.generate_from_data(s, cmp, compressed_dtype=s.dtype))
+                            dc.write_tile_2d(DEFAULT_VARIABLE_NAME if iw else p, c, dn, t, d)
+                        return _gen
+
+                    candidates.append(PreGenerationTask(
+                        label=label,
+                        cache_check=lambda t=tile, dc=disk_cache, p=tile_parameter, c=compression, dn=dim_name, iw=is_widget: dc.tile_2d_exists(DEFAULT_VARIABLE_NAME if iw else p, c, dn, t),
+                        generate=make_generate(),
+                    ))
+
+        if candidates:
+            logger.debug("[BGM] schedule 2d: %d candidates for %s iv=%d", len(candidates), tile_parameter, index_value)
+            self.background_gen_manager.schedule(candidates)
+
+    def _maybe_schedule_pre_generation_3d(self, dataset, parameter: str,
+                                           lod: int, tiles: list, cache_config: "DatasetCacheConfig",
+                                           override_disk_cache: "TileDiskCache | None" = None) -> None:
+        disk_cache = override_disk_cache if dataset is None else self.dataset_tile_disk_caches.get(dataset.id)
+        if not (cache_config.local_enabled and disk_cache is not None):
+            return
+        if cache_config.pre_generation_offset_3d <= 0:
+            return
+
+        offset = cache_config.pre_generation_offset_3d
+        all_lods = cache_config.pre_generation_all_lods_3d
+        compression = self.tile_compressor.current_output_tile_format
+        compressor = self.tile_compressor
+        is_widget = dataset is None
+
+        if is_widget:
+            source_data = self.data_source_proxy if self.use_data_source_proxy else self.data_source
+            depth, height, width = self.data_source.shape[:3]
+            max_lod = calculate_max_lod(self.TILE_SIZE_3D, list(self.data_source.shape[:3]))
+            lods_to_gen = range(0, max_lod + 1) if all_lods else [lod]
+            dataset_id = ""
+            tile_parameter = DEFAULT_VARIABLE_NAME
+            is_anomaly = False
+        else:
+            is_anomaly = parameter.endswith(ANOMALY_PARAMETER_ID_SUFFIX)
+            real_parameter = parameter[:-len(ANOMALY_PARAMETER_ID_SUFFIX)] if is_anomaly else parameter
+            source_data, _ = open_parameter_data(dataset.ds, real_parameter)
+            depth = dataset.z_max
+            height = dataset.y_max
+            width = dataset.x_max
+            lods_to_gen = range(0, dataset.max_lod_3d + 1) if all_lods else [lod]
+            dataset_id = dataset.id
+            tile_parameter = parameter
+
+        z_values = list(set(t.tz for t in tiles if isinstance(t, Tile3D)))
+
+        candidates: list[PreGenerationTask] = []
+        for tz_foreground in z_values:
+            for delta in range(-offset, offset + 1):
+                if delta == 0:
+                    continue
+                tz = tz_foreground + delta
+                if tz < 0:
+                    continue
+                for gen_lod in lods_to_gen:
+                    lod_factor = pow(0.5, gen_lod)
+                    max_tz = math.ceil(lod_factor * depth / self.TILE_SIZE_3D) - 1
+                    if tz > max_tz:
+                        continue
+                    x_tiles = math.ceil(lod_factor * width / self.TILE_SIZE_3D)
+                    y_tiles = math.ceil(lod_factor * height / self.TILE_SIZE_3D)
+                    for ty in range(y_tiles):
+                        for tx in range(x_tiles):
+                            tile = Tile3D(self.TILE_SIZE_3D, dataset_id, tile_parameter, gen_lod, tx, ty, tz)
+                            actual_tile = tile.get_anomaly_tile() if is_anomaly else tile
+                            label = f"3d {'widget' if is_widget else dataset_id}/{tile_parameter} tz={tz} lod={gen_lod} xy=({tx},{ty})"
+
+                            def make_generate(t=tile, at=actual_tile, s=source_data, dc=disk_cache, p=tile_parameter, c=compression, iw=is_widget, cmp=compressor):
+                                async def _gen():
+                                    loop = asyncio.get_event_loop()
+                                    d = await loop.run_in_executor(None, lambda: at.generate_and_compress_from_data(s, cmp, compressed_dtype=s.dtype))
+                                    dc.write_tile_3d(DEFAULT_VARIABLE_NAME if iw else p, c, t, d)
+                                return _gen
+
+                            candidates.append(PreGenerationTask(
+                                label=label,
+                                cache_check=lambda t=tile, dc=disk_cache, p=tile_parameter, c=compression, iw=is_widget: dc.tile_3d_exists(DEFAULT_VARIABLE_NAME if iw else p, c, t),
+                                generate=make_generate(),
+                            ))
+
+        if candidates:
+            logger.debug("[BGM] schedule 3d: %d candidates for %s", len(candidates), tile_parameter)
+            self.background_gen_manager.schedule(candidates)
 
     async def handle_event_request_standalone(self, socketio, sender_id, request_data):
         event_type = request_data["eventType"]
@@ -2145,7 +2670,7 @@ class BlockFile2D:
 
         if generation_cache.save_on_disk:
             for t in tiles:
-                os.remove(tile_disk_storage.get_tile_2d_path(t))
+                os.remove(tile_disk_storage.get_tile_2d_path(t, generation_cache.tile_format))
         
         return len(header_data) + len(body_data)
     
@@ -2207,6 +2732,6 @@ class BlockFile3D:
 
         if generation_cache.save_on_disk:
             for t in tiles:
-                os.remove(tile_disk_storage.get_tile_3d_path(t))
+                os.remove(tile_disk_storage.get_tile_3d_path(t, tile_format))
         
         return len(header_data) + len(body_data)

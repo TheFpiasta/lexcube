@@ -613,10 +613,6 @@ class-validator@0.14.3:
   version "0.14.3"
   resolved "https://registry.yarnpkg.com/class-validator/-/class-validator-0.14.3.tgz#834a4caafa8359aed73d7708badb4cf271be50fe"
   integrity sha512-rXXekcjofVN1LTOSw+u4u9WXVEUvNBVjORW154q/IdmYWy1nMbOU9aNtZB0t8m+FJQ9q91jlr2f9CwwUFdFMRA==
-  dependencies:
-    "@types/validator" "^13.15.3"
-    libphonenumber-js "^1.11.1"
-    validator "^13.15.20"
 
 cliui@^6.0.0:
   version "6.0.0"
@@ -1623,7 +1619,7 @@ vite-plugin-bundle-obfuscator@^1.0.0:
     "@jridgewell/remapping" "^2.3.5"
     javascript-obfuscator "^5.4.1"
 
-vite@^7.3.0:
+vite@^7.3.2:
   version "7.3.3"
   resolved "https://registry.yarnpkg.com/vite/-/vite-7.3.3.tgz#d7e07a52b5873fb86f902a3f4b3d17410337450f"
   integrity sha512-/4XH147Ui7OGTjg3HbdWe5arnZQSbfuRzdr9Ec7TQi5I7R+ir0Rlc9GIvD4v0XZurELqA035KVXJXpR61xhiTA==

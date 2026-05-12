@@ -531,7 +531,7 @@ class CubeInteraction {
     cubeSelection!: CubeSelection;
     private cubeParameters!: Map<string, Parameter>;
     private selectedParameter!: Parameter;
-    private selectedCubeMetadata!: { attrs: any, coords: any, data_vars: any, dims: any, max_lod_2d: number, max_lod_3d: number, enable_2d_tiles: boolean, enable_3d_tiles: boolean, sparsity: number, allow_data_downloads: boolean };
+    private selectedCubeMetadata!: { attrs: any, coords: any, data_vars: any, dims: any, max_lod_2d: number, max_lod_3d: number, enable_2d_tiles: boolean, enable_3d_tiles: boolean, sparsity: number, allow_data_downloads: boolean, cache_memory_enabled: boolean };
 
     private interactingFace = -1;
     private panStartUv = new Vector2();
@@ -2666,6 +2666,7 @@ class CubeInteraction {
         }
 
         ParameterRange.sparsity = this.selectedCubeMetadata.sparsity;
+        this.context.networking.setMemoryEnabled(this.selectedCubeMetadata.cache_memory_enabled ?? true);
         this.cubeParameters = new Map<string, Parameter>();
         const isAnomalyDataset = this.cubeTags.includes(CubeTag.AnomaliesOnly);
         for (let parameterId of Object.keys(meta["data_vars"])) {
