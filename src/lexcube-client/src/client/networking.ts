@@ -33,6 +33,7 @@ class Networking {
 
     private tileCache: Map<string, any>;
     private eventCache: Map<string, any>;
+    private memoryEnabled: boolean = true;
 
     constructor(context: CubeClientContext, apiServerUrl: string) {
         this.context = context;
@@ -219,7 +220,7 @@ class Networking {
         let tilesToDownload: (Tile2D | Tile3D)[] = [];
         for (let t of requestedTiles) {
             const key = t.getHashKey();
-            if (this.tileCache.has(key)) {
+            if (this.memoryEnabled && this.tileCache.has(key)) {
                 this.context.tileData.receiveTile(t, this.tileCache.get(key), requestIntention);
                 continue;
             } 
@@ -381,6 +382,13 @@ class Networking {
     getFetchUrl(endpoint: string): any {
         return `${this.apiServerUrl}${endpoint}`;
     }    
+
+    setMemoryEnabled(enabled: boolean) {
+        this.memoryEnabled = enabled;
+        if (!enabled) {
+            this.tileCache = new Map<string, any>();
+        }
+    }
 
     resetTileCache() {
         this.context.log("Resetting tile cache")

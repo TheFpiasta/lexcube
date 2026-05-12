@@ -88,7 +88,16 @@ class Cube3DWidget(widgets.DOMWidget):
 
     force_float32_for_voxel_mode = Bool(False).tag(sync=True)
 
-    def __init__(self, data_source, cmap: Union[str, list, None] = None, vmin: Union[float, None] = None, vmax: Union[float, None] = None, isometric_mode: bool = False, use_lexcube_chunk_caching: bool = True, overlaid_geojson: Unicode = "", overlaid_geojson_color: Unicode = "black", widget_size: tuple = None, cube_scale: list = None, camera_angle: list = None, force_float32_for_voxel_mode: bool = False, **kwargs):
+    def __init__(self, data_source, cmap: Union[str, list, None] = None, vmin: Union[float, None] = None, vmax: Union[float, None] = None, isometric_mode: bool = False, use_lexcube_chunk_caching: bool = True, overlaid_geojson: Unicode = "", overlaid_geojson_color: Unicode = "black", widget_size: tuple = None, cube_scale: list = None, camera_angle: list = None, force_float32_for_voxel_mode: bool = False,
+                 cache_memory_enabled: bool = True,
+                 cache_local_enabled: bool = True,
+                 cache_local_dir: str = "",
+                 cache_local_max_cache_gb: float = 10.0,
+                 cache_local_pre_generation_offset_2d: int = 0,
+                 cache_local_pre_generation_offset_3d: int = 0,
+                 cache_local_pre_generation_all_lods_2d: bool = True,
+                 cache_local_pre_generation_all_lods_3d: bool = False,
+                 **kwargs):
         super().__init__(**kwargs)
         self.cmap = cmap or self.cmap
         self.vmin = vmin
@@ -98,8 +107,18 @@ class Cube3DWidget(widgets.DOMWidget):
         self.force_float32_for_voxel_mode = force_float32_for_voxel_mode
         self.cube_scale = cube_scale or self.cube_scale
         self.camera_angle = camera_angle or self.camera_angle
-        self._tile_server, self._dims, self._indices = start_tile_server_in_widget_mode(self, data_source, use_lexcube_chunk_caching)
-        self._data_source = self._tile_server.data_source # tile server may have patched/modified data set
+        self._tile_server, self._dims, self._indices = start_tile_server_in_widget_mode(
+            self, data_source, use_lexcube_chunk_caching,
+            cache_memory_enabled=cache_memory_enabled,
+            cache_local_enabled=cache_local_enabled,
+            cache_local_dir=cache_local_dir,
+            cache_local_max_cache_gb=cache_local_max_cache_gb,
+            cache_local_pre_generation_offset_2d=cache_local_pre_generation_offset_2d,
+            cache_local_pre_generation_offset_3d=cache_local_pre_generation_offset_3d,
+            cache_local_pre_generation_all_lods_2d=cache_local_pre_generation_all_lods_2d,
+            cache_local_pre_generation_all_lods_3d=cache_local_pre_generation_all_lods_3d,
+        )
+        self._data_source = self._tile_server.data_source
         self.overlaid_geojson = overlaid_geojson
         self.overlaid_geojson_color = overlaid_geojson_color
         if not self._tile_server:

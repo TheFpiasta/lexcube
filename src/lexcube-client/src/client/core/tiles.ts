@@ -31,18 +31,21 @@ import type { CubeClientContext } from '../client';
 export class Tile2D {
     static fromResponseData(metadata: any): Tile2D[] {
         const tiles = [];
+        const tileFormat = metadata.tileFormat ?? TILE_FORMAT_ZFP;
         for (let xy of metadata.xys) {
-            tiles.push(new Tile2D(metadata.face, metadata.indexValue, metadata.lod, xy[0], xy[1], metadata.datasetId, metadata.parameter))
+            tiles.push(new Tile2D(metadata.face, metadata.indexValue, metadata.lod, xy[0], xy[1], metadata.datasetId, metadata.parameter, tileFormat))
         }
         return tiles;
     }
 
     static fromHashKey(context: CubeClientContext, key: string): Tile2D {
         const s = key.split("_");
+        // key format: face_indexValue_lod_x_y_cubeId_parameter_tileFormat
+        // cubeId/parameter/tileFormat are taken from context or defaulted — we only need face/lod/x/y for view-containment checks
         return new Tile2D(Number(s[0]), Number(s[1]), Number(s[2]), Number(s[3]), Number(s[4]), context.interaction.selectedCube.id, context.interaction.selectedParameterId);
     }
 
-    constructor(face: CubeFace, indexValue: number, lod: number, tileX: number, tileY: number, cubeId: string, parameter: string) {
+    constructor(face: CubeFace, indexValue: number, lod: number, tileX: number, tileY: number, cubeId: string, parameter: string, tileFormat: string = TILE_FORMAT_ZFP) {
         this.cubeId = cubeId;
         this.parameter = parameter;
         this.face = face;
@@ -50,6 +53,7 @@ export class Tile2D {
         this.lod = lod;
         this.x = tileX;
         this.y = tileY;
+        this.tileFormat = tileFormat;
     }
 
     getRequestGroupKey() {
@@ -67,6 +71,7 @@ export class Tile2D {
     getRequestData() {
         return {
             tileType: TILE_TYPE_2D,
+            tileFormat: this.tileFormat,
             face: this.face,
             datasetId: this.cubeId,
             parameter: this.parameter,
@@ -81,7 +86,7 @@ export class Tile2D {
     getRequestDataWithMultipleXYs(xys: number[][]) {
         return {
             tileType: TILE_TYPE_2D,
-            tileFormat: TILE_FORMAT_ZFP,
+            tileFormat: this.tileFormat,
             face: this.face,
             datasetId: this.cubeId,
             parameter: this.parameter,
@@ -93,7 +98,7 @@ export class Tile2D {
     }
 
     getHashKey() {
-        return `${this.face}_${this.indexValue}_${this.lod}_${this.x}_${this.y}_${this.cubeId}_${this.parameter}`;
+        return `${this.face}_${this.indexValue}_${this.lod}_${this.x}_${this.y}_${this.cubeId}_${this.parameter}_${this.tileFormat}`;
     }
 
     cubeId: string;
@@ -103,6 +108,7 @@ export class Tile2D {
     lod: number;
     x: number;
     y: number;
+    tileFormat: string;
 }
 
 
@@ -110,22 +116,25 @@ export class Tile3D {
     static fromResponseData(metadata: any): Tile3D[] {
         const tiles = [];
         const indexMaskEventName = metadata.indexMaskEventType ? `${metadata.quantileIndexMaskEventName}_${metadata.lod}` : null;
+        const tileFormat = metadata.tileFormat ?? TILE_FORMAT_ZFP;
         for (let xyz of metadata.xyzs) {
-            tiles.push(new Tile3D(metadata.lod, xyz[0], xyz[1], xyz[2], metadata.datasetId, metadata.parameter, indexMaskEventName))
+            tiles.push(new Tile3D(metadata.lod, xyz[0], xyz[1], xyz[2], metadata.datasetId, metadata.parameter, indexMaskEventName, tileFormat))
         }
         return tiles;
     }
 
     static fromHashKey(context: CubeClientContext, key: string): Tile3D {
         const s = key.split("_");
+        // key format: lod_x_y_z_cubeId_parameter_tileFormat[_indexMaskEventType]
+        // cubeId/parameter/tileFormat not extracted; only lod/x/y/z needed for view-containment checks
         return new Tile3D(Number(s[0]), Number(s[1]), Number(s[2]), Number(s[3]), context.interaction.selectedCube.id, context.interaction.selectedParameterId, s.length > 7 ? s[7] : null);
     }
 
     getHashKey() {
-        return `${this.lod}_${this.x}_${this.y}_${this.z}_${this.cubeId}_${this.parameter}${this.indexMaskEventType ? ("_" + this.indexMaskEventType) : ""}`;
+        return `${this.lod}_${this.x}_${this.y}_${this.z}_${this.cubeId}_${this.parameter}_${this.tileFormat}${this.indexMaskEventType ? ("_" + this.indexMaskEventType) : ""}`;
     }
 
-    constructor(lod: number, tileX: number, tileY: number, tileZ: number, cubeId: string, parameter: string, indexMaskEventName: string | null = null) {
+    constructor(lod: number, tileX: number, tileY: number, tileZ: number, cubeId: string, parameter: string, indexMaskEventName: string | null = null, tileFormat: string = TILE_FORMAT_ZFP) {
         this.cubeId = cubeId;
         this.parameter = parameter;
         this.lod = lod;
@@ -133,6 +142,7 @@ export class Tile3D {
         this.y = tileY;
         this.z = tileZ;
         this.indexMaskEventType = indexMaskEventName;
+        this.tileFormat = tileFormat;
     }
 
     isIndexMask() {
@@ -186,6 +196,7 @@ export class Tile3D {
     y: number;
     z: number;
     indexMaskEventType: string | null;
+    tileFormat: string;
 }
 
 

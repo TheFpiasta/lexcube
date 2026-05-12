@@ -11,6 +11,21 @@
       "enable2dTiles": true,
       "enable3dTiles": true,
       "target3dTileFormats": ["zfp"],
+      "cache": {
+        "memory": {
+          "enabled": false
+        },
+        "local": {
+          "enabled": true,
+          "maxCacheGb": 10,
+          "preGeneration": {
+            "offset2d": 5,
+            "offset3d": 2,
+            "allLods2d": true,
+            "allLods3d": false
+          }
+        }
+      },
       "notes": {
         "source": {
           "url": "https://data.rsc4earth.de/download/EarthSystemDataCube/v3.0.2/esdc-16d-2.5deg-46x72x144-3.0.2.zarr/"
@@ -45,6 +60,21 @@
       "allowFloat64": false,
       "forceTileGeneration": false,
       "hidden": false,
+      "cache": {
+        "memory": {
+          "enabled": false
+        },
+        "local": {
+          "enabled": true,
+          "maxCacheGb": 10,
+          "preGeneration": {
+            "offset2d": 5,
+            "offset3d": 2,
+            "allLods2d": true,
+            "allLods3d": false
+          }
+        }
+      },
       "notes": { "source": { "url": "n/a" } }
     }
   ]

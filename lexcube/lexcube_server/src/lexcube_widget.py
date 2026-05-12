@@ -15,14 +15,22 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 from __future__ import annotations
-from .tile_server import DEFAULT_DIMENSIONS, DEFAULT_VARIABLE_NAME, TileServer, calculate_max_lod, API_VERSION, get_dimension_labels
+from .tile_server import DEFAULT_CACHE_LOCAL_MAX_GB, DEFAULT_DIMENSIONS, DEFAULT_VARIABLE_NAME, TileServer, calculate_max_lod, API_VERSION, get_dimension_labels
 from typing import Union
 import ipywidgets as widgets
 import numpy as np
 import xarray as xr
 
 
-def start_tile_server_in_widget_mode(widget: widgets.DOMWidget, data_source: Union[xr.DataArray, xr.Dataset, np.ndarray], use_lexcube_chunk_caching: bool):
+def start_tile_server_in_widget_mode(widget: widgets.DOMWidget, data_source: Union[xr.DataArray, xr.Dataset, np.ndarray], use_lexcube_chunk_caching: bool,
+                                     cache_memory_enabled: bool = True,
+                                     cache_local_enabled: bool = True,
+                                     cache_local_dir: str = "",
+                                     cache_local_max_cache_gb: float = DEFAULT_CACHE_LOCAL_MAX_GB,
+                                     cache_local_pre_generation_offset_2d: int = 0,
+                                     cache_local_pre_generation_offset_3d: int = 0,
+                                     cache_local_pre_generation_all_lods_2d: bool = True,
+                                     cache_local_pre_generation_all_lods_3d: bool = False):
     if type(data_source) not in [xr.DataArray, xr.Dataset, np.ndarray]:
         print("Error: Input data is not xarray.DataArray or xr.Dataset or numpy.ndarray")
         raise Exception("Error: Input data is not xarray.DataArray or xr.Dataset or numpy.ndarray")
@@ -31,7 +39,17 @@ def start_tile_server_in_widget_mode(widget: widgets.DOMWidget, data_source: Uni
         raise Exception("Error: Data source is not 3- or 4-dimensional")
 
     tile_server = TileServer(widget_mode = True)
-    tile_server.startup_widget(data_source, use_lexcube_chunk_caching)
+    tile_server.startup_widget(
+        data_source, use_lexcube_chunk_caching,
+        cache_memory_enabled=cache_memory_enabled,
+        cache_local_enabled=cache_local_enabled,
+        cache_local_dir=cache_local_dir,
+        cache_local_max_cache_gb=cache_local_max_cache_gb,
+        cache_local_pre_generation_offset_2d=cache_local_pre_generation_offset_2d,
+        cache_local_pre_generation_offset_3d=cache_local_pre_generation_offset_3d,
+        cache_local_pre_generation_all_lods_2d=cache_local_pre_generation_all_lods_2d,
+        cache_local_pre_generation_all_lods_3d=cache_local_pre_generation_all_lods_3d,
+    )
     
     data_source = tile_server.data_source # tile server may have patched/modified data set
 
@@ -77,7 +95,8 @@ def start_tile_server_in_widget_mode(widget: widgets.DOMWidget, data_source: Uni
             "max_lod_3d": calculate_max_lod(tile_server.TILE_SIZE_3D, data_source.shape),
             "enable_2d_tiles": True,
             "enable_3d_tiles": True,
-            "sparsity": 1
+            "sparsity": 1,
+            "cache_memory_enabled": tile_server.widget_cache_config.memory_enabled
         }
     }
 

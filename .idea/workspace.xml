@@ -18,9 +18,16 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="7cd8356a-28bc-4a14-9ce1-704b063cf7ce" name="Changes" comment="docs: add AGENTS.md with repo structure and setup guide">
+    <list default="true" id="7cd8356a-28bc-4a14-9ce1-704b063cf7ce" name="Changes" comment="feat: update lock and ide file">
+      <change beforePath="$PROJECT_DIR$/.idea/lexcubeV2.iml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/lexcubeV2.iml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/lexcube-client/yarn.lock" beforeDir="false" afterPath="$PROJECT_DIR$/src/lexcube-client/yarn.lock" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/config.example.json" beforeDir="false" afterPath="$PROJECT_DIR$/config.example.json" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/lexcube/cube3d.py" beforeDir="false" afterPath="$PROJECT_DIR$/lexcube/cube3d.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/lexcube/lexcube_server/src/lexcube_widget.py" beforeDir="false" afterPath="$PROJECT_DIR$/lexcube/lexcube_server/src/lexcube_widget.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/lexcube/lexcube_server/src/tile_server.py" beforeDir="false" afterPath="$PROJECT_DIR$/lexcube/lexcube_server/src/tile_server.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/lexcube-client/src/client/core/tiles.ts" beforeDir="false" afterPath="$PROJECT_DIR$/src/lexcube-client/src/client/core/tiles.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/lexcube-client/src/client/interaction.ts" beforeDir="false" afterPath="$PROJECT_DIR$/src/lexcube-client/src/client/interaction.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/lexcube-client/src/client/networking.ts" beforeDir="false" afterPath="$PROJECT_DIR$/src/lexcube-client/src/client/networking.ts" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -66,7 +73,7 @@
     </persistenceIdMap>
   </component>
   <component name="EmbeddingIndexingInfo">
-    <option name="cachedIndexableFilesCount" value="894" />
+    <option name="cachedIndexableFilesCount" value="895" />
     <option name="fileBasedEmbeddingIndicesEnabled" value="true" />
   </component>
   <component name="Git.Settings">
@@ -86,7 +93,7 @@
     <option name="INCOMING_COMMITS_CHECK_STRATEGY" value="FETCH" />
     <option name="RECENT_BRANCH_BY_REPOSITORY">
       <map>
-        <entry key="$PROJECT_DIR$" value="fix-v2-version" />
+        <entry key="$PROJECT_DIR$" value="earthquake-data" />
       </map>
     </option>
     <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
@@ -97,12 +104,12 @@
     &quot;assignee&quot;: &quot;TheFpiasta&quot;
   }
 }</component>
-  <component name="GithubPullRequestsUISettings"><![CDATA[{
-  "selectedUrlAndAccountId": {
-    "url": "https://github.com/TheFpiasta/lexcube",
-    "accountId": "930200d1-178d-4d22-92e1-34f6b8c567f9"
+  <component name="GithubPullRequestsUISettings">{
+  &quot;selectedUrlAndAccountId&quot;: {
+    &quot;url&quot;: &quot;https://github.com/TheFpiasta/lexcube&quot;,
+    &quot;accountId&quot;: &quot;930200d1-178d-4d22-92e1-34f6b8c567f9&quot;
   }
-}]]></component>
+}</component>
   <component name="McpProjectServerCommands">
     <commands />
     <urls />
@@ -129,7 +136,7 @@
     "RunOnceActivity.typescript.service.memoryLimit.init": "true",
     "codeWithMe.voiceChat.enabledByDefault": "false",
     "com.intellij.ml.llm.matterhorn.ej.ui.settings.DefaultModelSelectionForGA.v1": "true",
-    "git-widget-placeholder": "earthquake-data",
+    "git-widget-placeholder": "caching",
     "git.auto.fetch.suggestion.counter": "1",
     "javascript.preferred.runtime.type.id": "node",
     "junie.onboarding.icon.badge.shown": "true",
@@ -139,10 +146,10 @@
     "node.js.selected.package.eslint": "(autodetect)",
     "node.js.selected.package.tslint": "(autodetect)",
     "nodejs_package_manager_path": "npm",
-    "prettierjs.PrettierConfiguration.Package": "C:\\Users\\felix\\WebstormProjects\\lexcube\\node_modules\\prettier",
+    "prettierjs.PrettierConfiguration.Package": "/home/fpiasta/WebstormProjects/lexcubeV2/node_modules/prettier",
     "settings.editor.selected.configurable": "com.jetbrains.python.configuration.PyActiveSdkModuleConfigurable",
     "to.speed.mode.migration.done": "true",
-    "ts.external.directory.path": "C:\\Users\\felix\\WebstormProjects\\lexcube\\node_modules\\typescript\\lib",
+    "ts.external.directory.path": "/home/fpiasta/WebstormProjects/lexcubeV2/node_modules/typescript/lib",
     "vue.rearranger.settings.migration": "true"
   }
 }]]></component>
@@ -168,7 +175,10 @@
       <workItem from="1778351443443" duration="791000" />
       <workItem from="1778403741534" duration="8858000" />
       <workItem from="1778412831193" duration="297000" />
-      <workItem from="1778485361979" duration="1599000" />
+      <workItem from="1778485361979" duration="1641000" />
+      <workItem from="1778498719212" duration="8124000" />
+      <workItem from="1778514731324" duration="21000" />
+      <workItem from="1778570002666" duration="9989000" />
     </task>
     <task id="LOCAL-00001" summary="feat: fix cant change branch">
       <option name="closed" value="true" />
@@ -258,7 +268,15 @@
       <option name="project" value="LOCAL" />
       <updated>1778414312014</updated>
     </task>
-    <option name="localTasksCounter" value="12" />
+    <task id="LOCAL-00012" summary="feat: update lock and ide file">
+      <option name="closed" value="true" />
+      <created>1778488725943</created>
+      <option name="number" value="00012" />
+      <option name="presentableId" value="LOCAL-00012" />
+      <option name="project" value="LOCAL" />
+      <updated>1778488725943</updated>
+    </task>
+    <option name="localTasksCounter" value="13" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -294,7 +312,8 @@
     <MESSAGE value="add ide files" />
     <MESSAGE value="fix: ide file" />
     <MESSAGE value="fix: update ide file" />
-    <option name="LAST_COMMIT_MESSAGE" value="fix: update ide file" />
+    <MESSAGE value="feat: update lock and ide file" />
+    <option name="LAST_COMMIT_MESSAGE" value="feat: update lock and ide file" />
   </component>
   <component name="github-copilot-workspace">
     <instructionFileLocations>
