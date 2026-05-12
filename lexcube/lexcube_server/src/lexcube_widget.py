@@ -59,9 +59,13 @@ def start_tile_server_in_widget_mode(widget: widgets.DOMWidget, data_source: Uni
     def receive_message(widget, content, buffers):
         requests = content["request_data"]
         tile_server.pre_register_requests(requests)
+        tile_server._pregen_store.clear()
         for request in requests:
+            tile_server._cancel_dispatcher()
+            tile_server.background_gen_manager.cancel()
             response = tile_server.handle_tile_request_widget(request)
             reply(response[0], response[1])
+            tile_server._start_dispatcher()
 
     if type(data_source) == xr.DataArray:
         dims = data_source.dims

@@ -28,7 +28,7 @@ import uvicorn
 
 from lexcube.lexcube_server.src.tile_server import TileServer, API_VERSION
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+logging.basicConfig(level=logging.DEBUG, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("lexcube")
 
 GEOJSON_DIR = Path(__file__).parent / "geojson"
@@ -117,8 +117,12 @@ async def handle_request_tile_data(sid, data):
 @sio.on("request_tile_data_multiple")
 async def handle_request_tile_data_multiple(sid, data):
     try:
+        tile_server._pregen_store.clear()
         for request_data in data:
+            tile_server._cancel_dispatcher()
+            tile_server.background_gen_manager.cancel()
             await tile_server.handle_tile_request_standalone(sio, sid, request_data)
+            tile_server._start_dispatcher()
     except Exception as e:
         logger.error("Error in request_tile_data_multiple (sid=%s): %s\n%s", sid, e, traceback.format_exc())
 

@@ -18,16 +18,11 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="7cd8356a-28bc-4a14-9ce1-704b063cf7ce" name="Changes" comment="feat: update lock and ide file">
-      <change beforePath="$PROJECT_DIR$/.idea/lexcubeV2.iml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/lexcubeV2.iml" afterDir="false" />
+    <list default="true" id="7cd8356a-28bc-4a14-9ce1-704b063cf7ce" name="Changes" comment="feat: add disk cache and background pre-generation for tiles&#10;&#10;- Introduce tile cache to persist compressed tiles on disk&#10;- Add per-dataset based cache configuration&#10;- Add background pre-generation manager to asynchronously pre-generate adjacent 2D and 3D tiles after each request&#10;- Include compression format in tile hash keys and disk paths so different formats are stored and looked up independently&#10;- Propagate cache_memory_enabled from server metadata to the frontend so the in-memory tile cache can be disabled per dataset&#10;- Fix tile path helpers to accept a compression argument, keeping block-file assembly and disk-cache paths consistent">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/config.example.json" beforeDir="false" afterPath="$PROJECT_DIR$/config.example.json" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/lexcube/cube3d.py" beforeDir="false" afterPath="$PROJECT_DIR$/lexcube/cube3d.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/lexcube/lexcube_server/src/lexcube_standalone.py" beforeDir="false" afterPath="$PROJECT_DIR$/lexcube/lexcube_server/src/lexcube_standalone.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/lexcube/lexcube_server/src/lexcube_widget.py" beforeDir="false" afterPath="$PROJECT_DIR$/lexcube/lexcube_server/src/lexcube_widget.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/lexcube/lexcube_server/src/tile_server.py" beforeDir="false" afterPath="$PROJECT_DIR$/lexcube/lexcube_server/src/tile_server.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/lexcube-client/src/client/core/tiles.ts" beforeDir="false" afterPath="$PROJECT_DIR$/src/lexcube-client/src/client/core/tiles.ts" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/lexcube-client/src/client/interaction.ts" beforeDir="false" afterPath="$PROJECT_DIR$/src/lexcube-client/src/client/interaction.ts" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/lexcube-client/src/client/networking.ts" beforeDir="false" afterPath="$PROJECT_DIR$/src/lexcube-client/src/client/networking.ts" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -178,7 +173,7 @@
       <workItem from="1778485361979" duration="1641000" />
       <workItem from="1778498719212" duration="8124000" />
       <workItem from="1778514731324" duration="21000" />
-      <workItem from="1778570002666" duration="9989000" />
+      <workItem from="1778570002666" duration="19066000" />
     </task>
     <task id="LOCAL-00001" summary="feat: fix cant change branch">
       <option name="closed" value="true" />
@@ -276,7 +271,15 @@
       <option name="project" value="LOCAL" />
       <updated>1778488725943</updated>
     </task>
-    <option name="localTasksCounter" value="13" />
+    <task id="LOCAL-00013" summary="feat: add disk cache and background pre-generation for tiles&#10;&#10;- Introduce tile cache to persist compressed tiles on disk&#10;- Add per-dataset based cache configuration&#10;- Add background pre-generation manager to asynchronously pre-generate adjacent 2D and 3D tiles after each request&#10;- Include compression format in tile hash keys and disk paths so different formats are stored and looked up independently&#10;- Propagate cache_memory_enabled from server metadata to the frontend so the in-memory tile cache can be disabled per dataset&#10;- Fix tile path helpers to accept a compression argument, keeping block-file assembly and disk-cache paths consistent">
+      <option name="closed" value="true" />
+      <created>1778581316749</created>
+      <option name="number" value="00013" />
+      <option name="presentableId" value="LOCAL-00013" />
+      <option name="project" value="LOCAL" />
+      <updated>1778581316750</updated>
+    </task>
+    <option name="localTasksCounter" value="14" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -313,7 +316,8 @@
     <MESSAGE value="fix: ide file" />
     <MESSAGE value="fix: update ide file" />
     <MESSAGE value="feat: update lock and ide file" />
-    <option name="LAST_COMMIT_MESSAGE" value="feat: update lock and ide file" />
+    <MESSAGE value="feat: add disk cache and background pre-generation for tiles&#10;&#10;- Introduce tile cache to persist compressed tiles on disk&#10;- Add per-dataset based cache configuration&#10;- Add background pre-generation manager to asynchronously pre-generate adjacent 2D and 3D tiles after each request&#10;- Include compression format in tile hash keys and disk paths so different formats are stored and looked up independently&#10;- Propagate cache_memory_enabled from server metadata to the frontend so the in-memory tile cache can be disabled per dataset&#10;- Fix tile path helpers to accept a compression argument, keeping block-file assembly and disk-cache paths consistent" />
+    <option name="LAST_COMMIT_MESSAGE" value="feat: add disk cache and background pre-generation for tiles&#10;&#10;- Introduce tile cache to persist compressed tiles on disk&#10;- Add per-dataset based cache configuration&#10;- Add background pre-generation manager to asynchronously pre-generate adjacent 2D and 3D tiles after each request&#10;- Include compression format in tile hash keys and disk paths so different formats are stored and looked up independently&#10;- Propagate cache_memory_enabled from server metadata to the frontend so the in-memory tile cache can be disabled per dataset&#10;- Fix tile path helpers to accept a compression argument, keeping block-file assembly and disk-cache paths consistent" />
   </component>
   <component name="github-copilot-workspace">
     <instructionFileLocations>

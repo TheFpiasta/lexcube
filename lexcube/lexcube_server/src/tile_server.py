@@ -21,6 +21,7 @@ import enum
 import gc
 from hashlib import sha512
 import json
+import logging
 import math
 import os
 import shutil
@@ -51,6 +52,8 @@ import psutil
 import xarray as xr
 from dask.cache import Cache
 from typing import Union
+
+logger = logging.getLogger("lexcube")
 
 UNCOMPRESSED_SUFFIX = "_uncompressed"
 ANOMALY_PARAMETER_ID_SUFFIX = "_lxc_anomaly"
@@ -698,21 +701,106 @@ class TileDiskCache:
                   f"({total / 1024**3:.2f} GB / {self._max_cache_bytes / 1024**3:.2f} GB). Writes paused.")
 
 
+class PreGenerationTask:
+    __slots__ = ("label", "cache_check", "generate", "_asyncio_task")
+
+    def __init__(self, label: str, cache_check: Callable[[], bool], generate: Callable) -> None:
+        self.label = label
+        self.cache_check = cache_check
+        self.generate = generate
+        self._asyncio_task: asyncio.Task | None = None
+
+
 class BackgroundGenerationManager:
-    def __init__(self) -> None:
-        self._tasks: list = []
+    def __init__(self, max_parallel: int = DEFAULT_PRE_GENERATION_THREADS) -> None:
+        self._max_parallel = max_parallel
+        self._scheduled: list[PreGenerationTask] = []
+        self._running: list[PreGenerationTask] = []
+        self._done: list[PreGenerationTask] = []
+        self._cancelled = False
+        self._scheduler_future: asyncio.Task | None = None
 
-    def cancel_all(self) -> None:
-        for task in self._tasks:
-            if not task.done():
-                task.cancel()
-        self._tasks = [t for t in self._tasks if not t.done()]
+    def schedule(self, candidates: list[PreGenerationTask]) -> None:
+        new_count = 0
+        hit_count = 0
+        for c in candidates:
+            if c.cache_check():
+                hit_count += 1
+            else:
+                self._scheduled.append(c)
+                new_count += 1
+        logger.debug(
+            "[BGM] schedule(): +%d queued, %d cache hits | scheduled=%d running=%d done=%d",
+            new_count, hit_count,
+            len(self._scheduled), len(self._running), len(self._done),
+        )
+        if new_count > 0:
+            self._ensure_scheduler_running()
 
-    def submit(self, coro) -> asyncio.Task:
-        self._tasks = [t for t in self._tasks if not t.done()]
-        task = asyncio.ensure_future(coro)
-        self._tasks.append(task)
-        return task
+    def cancel(self) -> None:
+        n_sched = len(self._scheduled)
+        n_run = len(self._running)
+        self._cancelled = True
+        for task in list(self._running):
+            if task._asyncio_task and not task._asyncio_task.done():
+                task._asyncio_task.cancel()
+        self._scheduled.clear()
+        self._running.clear()
+        self._done.clear()
+        logger.debug(
+            "[BGM] cancel(): cleared %d scheduled + %d running -> all lists empty",
+            n_sched, n_run,
+        )
+
+    def _ensure_scheduler_running(self) -> None:
+        if self._scheduler_future is None or self._scheduler_future.done():
+            self._cancelled = False
+            self._scheduler_future = asyncio.ensure_future(self._run_scheduler())
+
+    async def _run_scheduler(self) -> None:
+        logger.debug(
+            "[BGM] Scheduler started | scheduled=%d max_parallel=%d",
+            len(self._scheduled), self._max_parallel,
+        )
+        status_logger = asyncio.ensure_future(self._log_status_periodically())
+        try:
+            while not self._cancelled and (self._scheduled or self._running):
+                while not self._cancelled and self._scheduled and len(self._running) < self._max_parallel:
+                    task = self._scheduled.pop(0)
+                    task._asyncio_task = asyncio.ensure_future(self._run_single(task))
+                    self._running.append(task)
+                if self._running and not self._cancelled:
+                    active = [t._asyncio_task for t in self._running if t._asyncio_task is not None]
+                    if active:
+                        await asyncio.wait(active, return_when=asyncio.FIRST_COMPLETED)
+                if not self._cancelled:
+                    completed = [t for t in self._running if t._asyncio_task is not None and t._asyncio_task.done()]
+                    for t in completed:
+                        self._running.remove(t)
+                        self._done.append(t)
+        finally:
+            status_logger.cancel()
+            logger.debug(
+                "[BGM] Scheduler stopped | scheduled=%d running=%d done=%d",
+                len(self._scheduled), len(self._running), len(self._done),
+            )
+
+    async def _log_status_periodically(self) -> None:
+        while True:
+            await asyncio.sleep(10)
+            logger.debug(
+                "[BGM] Status | scheduled=%d running=%d done=%d",
+                len(self._scheduled), len(self._running), len(self._done),
+            )
+
+    async def _run_single(self, task: PreGenerationTask) -> None:
+        try:
+            await task.generate()
+        except asyncio.CancelledError:
+            logger.debug("[BGM] Cancelled: %s", task.label)
+            raise
+        except Exception as e:
+            logger.warning("[BGM] Failed: %s -> %s", task.label, e)
 
 
 class DatasetConfig:
@@ -1800,6 +1888,8 @@ class TileServer:
         self.dataset_tile_disk_caches: dict[str, TileDiskCache] = {}
         self.background_gen_manager = BackgroundGenerationManager()
         self.widget_cache_config = DatasetCacheConfig({})
+        self._pregen_store: list = []
+        self._dispatcher_task: asyncio.Task | None = None
     
 
     def update_progress(self, request_group_id: int, request_id: int, done: int, total: int = -1):
@@ -1993,8 +2083,6 @@ class TileServer:
         disk_enabled = self.widget_cache_config.local_enabled and disk_cache is not None
         compression = self.tile_compressor.current_output_tile_format
 
-        self.background_gen_manager.cancel_all()
-
         index_dimension = None
         index_value = None
         xys = None
@@ -2055,14 +2143,10 @@ class TileServer:
         if tiles_generated > 0 or disk_cache_hits > 0:
             print(f"[widget] tile_type={tile_type} lod={lod} generated={tiles_generated} mem_hits={memory_cache_hits} disk_hits={disk_cache_hits}")
 
-        self._maybe_schedule_pre_generation_2d(
-            None, DEFAULT_VARIABLE_NAME, index_dimension, index_value, lod, xys, self.widget_cache_config,
-            override_disk_cache=disk_cache,
-        )
-        self._maybe_schedule_pre_generation_3d(
-            None, DEFAULT_VARIABLE_NAME, lod, served_tiles, self.widget_cache_config,
-            override_disk_cache=disk_cache,
-        )
+        self._pregen_store.append((
+            (None, DEFAULT_VARIABLE_NAME, index_dimension, index_value, lod, xys, self.widget_cache_config, disk_cache),
+            (None, DEFAULT_VARIABLE_NAME, lod, served_tiles, self.widget_cache_config, disk_cache),
+        ))
 
         return ({"response_type": "tile_data", "metadata": request, "dataSizes": sizes}, [bytes(data)])
             
@@ -2079,8 +2163,6 @@ class TileServer:
         disk_cache = self.dataset_tile_disk_caches.get(dataset_id)
         disk_enabled = cache_config.local_enabled and disk_cache is not None
         compression = self.tile_compressor.current_output_tile_format
-
-        self.background_gen_manager.cancel_all()
 
         tiles = []
         blockfile = None
@@ -2109,9 +2191,15 @@ class TileServer:
         else:
             return print(f"Invalid tile type {tile_type}")
 
+        if tile_type == "2d":
+            request_label = f"{dataset_id}/{parameter} {index_dimension.name}={index_value} lod={lod}"
+        else:
+            request_label = f"{dataset_id}/{parameter} 3d tz={z_values[0]} lod={lod}"
+
         if blockfile and blockfile.exists():
             blockfile.load_header()
             (sizes, data) = blockfile.get_tile_data(tiles)
+            logger.info("  -> %s blockfile hit (%d tiles)", request_label, len(tiles))
             await socketio.emit("tile_data", { "metadata": request_data, "dataSizes": sizes, "data": bytes(data) }, to=sender_id)
             self._maybe_schedule_pre_generation_2d(dataset, parameter, index_dimension, index_value, lod, xys, cache_config)
             self._maybe_schedule_pre_generation_3d(dataset, parameter, lod, tiles, cache_config)
@@ -2127,7 +2215,7 @@ class TileServer:
                     d = disk_cache.read_tile_2d(parameter, compression, dim_name, t)
                     data += d
                     sizes.append(len(d))
-                print(f"[standalone] 2d disk_hits={len(tiles)} lod={lod} iv={index_value}")
+                logger.info("  -> %s 2d disk hit (%d tiles)", request_label, len(tiles))
                 await socketio.emit("tile_data", { "metadata": request_data, "dataSizes": sizes, "data": bytes(data) }, to=sender_id)
                 self._maybe_schedule_pre_generation_2d(dataset, parameter, index_dimension, index_value, lod, xys, cache_config)
                 return
@@ -2141,7 +2229,7 @@ class TileServer:
                     d = disk_cache.read_tile_3d(parameter, compression, t)
                     data += d
                     sizes.append(len(d))
-                print(f"[standalone] 3d disk_hits={len(tiles)} lod={lod}")
+                logger.info("  -> %s 3d disk hit (%d tiles)", request_label, len(tiles))
                 await socketio.emit("tile_data", { "metadata": request_data, "dataSizes": sizes, "data": bytes(data) }, to=sender_id)
                 self._maybe_schedule_pre_generation_3d(dataset, parameter, lod, tiles, cache_config)
                 return
@@ -2150,9 +2238,12 @@ class TileServer:
         real_parameter = parameter[:-len(ANOMALY_PARAMETER_ID_SUFFIX)] if is_anomaly else parameter
         source_data, _ = open_parameter_data(dataset.ds, real_parameter)
 
+        logger.info("Generating %d tile(s) for [%s]", len(tiles), request_label)
+
         def generate_tiles():
             gen_data = bytearray()
             gen_sizes = []
+            total = len(tiles)
             for tile in tiles:
                 actual_tile = tile.get_anomaly_tile() if is_anomaly else tile
                 if tile_type == "2d":
@@ -2161,6 +2252,7 @@ class TileServer:
                     d = actual_tile.generate_and_compress_from_data(source_data, self.tile_compressor, compressed_dtype=source_data.dtype)
                 gen_data += d
                 gen_sizes.append(len(d))
+                logger.debug("  -> %s foreground %d/%d", request_label, len(gen_sizes), total)
             return (gen_sizes, bytes(gen_data))
 
         try:
@@ -2177,16 +2269,38 @@ class TileServer:
             for i, tile in enumerate(tiles):
                 disk_cache.write_tile_2d(parameter, compression, dim_name, tile, data[offset:offset + sizes[i]])
                 offset += sizes[i]
+            logger.info("  -> %s wrote %d tile(s) to disk cache", request_label, len(tiles))
         elif disk_enabled and tile_type == "3d":
             assert disk_cache is not None
             offset = 0
             for i, tile in enumerate(tiles):
                 disk_cache.write_tile_3d(parameter, compression, tile, data[offset:offset + sizes[i]])
                 offset += sizes[i]
+            logger.info("  -> %s wrote %d tile(s) to disk cache", request_label, len(tiles))
 
         await socketio.emit("tile_data", { "metadata": request_data, "dataSizes": sizes, "data": data }, to=sender_id)
-        self._maybe_schedule_pre_generation_2d(dataset, parameter, index_dimension, index_value, lod, xys, cache_config)
-        self._maybe_schedule_pre_generation_3d(dataset, parameter, lod, tiles, cache_config)
+        self._pregen_store.append((
+            (dataset, parameter, index_dimension, index_value, lod, xys, cache_config),
+            (dataset, parameter, lod, tiles, cache_config),
+        ))
+
+    def _cancel_dispatcher(self) -> None:
+        if self._dispatcher_task and not self._dispatcher_task.done():
+            self._dispatcher_task.cancel()
+            logger.debug("[Dispatcher] Cancelled")
+        self._dispatcher_task = None
+
+    def _start_dispatcher(self) -> None:
+        self._dispatcher_task = asyncio.ensure_future(self._run_dispatcher())
+
+    async def _run_dispatcher(self) -> None:
+        await asyncio.sleep(0.2)
+        logger.debug("[Dispatcher] Fired: scheduling pre-gen for %d face(s)", len(self._pregen_store))
+        for args_2d, args_3d in self._pregen_store:
+            if args_2d is not None:
+                self._maybe_schedule_pre_generation_2d(*args_2d)
+            if args_3d is not None:
+                self._maybe_schedule_pre_generation_3d(*args_3d)
 
     def _maybe_schedule_pre_generation_2d(self, dataset, parameter: str,
                                            index_dimension, index_value, lod: int,
@@ -2195,19 +2309,79 @@ class TileServer:
         disk_cache = override_disk_cache if dataset is None else self.dataset_tile_disk_caches.get(dataset.id)
         if not (cache_config.local_enabled and disk_cache is not None):
             return
-        if cache_config.pre_generation_offset_2d > 0 and xys is not None and index_dimension is not None and index_value is not None:
-            if dataset is None:
-                self.background_gen_manager.submit(
-                    self._pre_generate_2d_widget(index_dimension, index_value, lod, xys,
-                                                 cache_config.pre_generation_offset_2d,
-                                                 cache_config.pre_generation_all_lods_2d, disk_cache)
-                )
+        if cache_config.pre_generation_offset_2d <= 0 or xys is None or index_dimension is None or index_value is None:
+            return
+
+        offset = cache_config.pre_generation_offset_2d
+        all_lods = cache_config.pre_generation_all_lods_2d
+        compression = self.tile_compressor.current_output_tile_format
+        compressor = self.tile_compressor
+        is_widget = dataset is None
+
+        if is_widget:
+            source_data = self.data_source_proxy if self.use_data_source_proxy else self.data_source
+            dim_name = self.widget_dim_names[index_dimension.value]
+            index_max = self.data_source.shape[index_dimension.value]
+            max_lod = calculate_max_lod(self.TILE_SIZE_2D, list(self.data_source.shape[:3]))
+            lods_to_gen = range(0, max_lod + 1) if all_lods else [lod]
+            dataset_id = ""
+            tile_parameter = DEFAULT_VARIABLE_NAME
+            sparsity = 1
+            is_anomaly = False
+            z_size, y_size, x_size = self.data_source.shape[:3]
+            tile_plane_width = x_size if index_dimension != Dimension.X else y_size
+            tile_plane_height = y_size if index_dimension == Dimension.Z else z_size
+        else:
+            is_anomaly = parameter.endswith(ANOMALY_PARAMETER_ID_SUFFIX)
+            real_parameter = parameter[:-len(ANOMALY_PARAMETER_ID_SUFFIX)] if is_anomaly else parameter
+            source_data, _ = open_parameter_data(dataset.ds, real_parameter)
+            dim_name = dataset.get_dimension_name(index_dimension)
+            index_max = [dataset.z_max, dataset.y_max, dataset.x_max][index_dimension.value]
+            lods_to_gen = range(0, dataset.max_lod_2d + 1) if all_lods else [lod]
+            dataset_id = dataset.id
+            tile_parameter = parameter
+            sparsity = dataset.pre_generation_sparsity_2d_tiles
+            tile_plane_width = dataset.x_max if index_dimension != Dimension.X else dataset.y_max
+            tile_plane_height = dataset.y_max if index_dimension == Dimension.Z else dataset.z_max
+
+        candidates: list[PreGenerationTask] = []
+        for delta in range(-offset, offset + 1):
+            if delta == 0:
+                continue
+            if is_widget:
+                iv = index_value + delta
             else:
-                self.background_gen_manager.submit(
-                    self._pre_generate_2d(dataset, parameter, index_dimension, index_value, lod, xys,
-                                          cache_config.pre_generation_offset_2d,
-                                          cache_config.pre_generation_all_lods_2d)
-                )
+                raw_iv = index_value + delta * sparsity
+                iv = (raw_iv // sparsity) * sparsity
+            if iv < 0 or iv >= index_max:
+                continue
+            for gen_lod in lods_to_gen:
+                lod_factor = pow(0.5, gen_lod)
+                max_tx = math.ceil(lod_factor * tile_plane_width / self.TILE_SIZE_2D)
+                max_ty = math.ceil(lod_factor * tile_plane_height / self.TILE_SIZE_2D)
+                for (tx, ty) in xys:
+                    if tx >= max_tx or ty >= max_ty:
+                        continue
+                    tile = Tile2D(self.TILE_SIZE_2D, dataset_id, tile_parameter, index_dimension, iv, gen_lod, tx, ty)
+                    actual_tile = tile.get_anomaly_tile() if is_anomaly else tile
+                    label = f"2d {'widget' if is_widget else dataset_id}/{tile_parameter} {index_dimension.name}={iv} lod={gen_lod} xy=({tx},{ty})"
+
+                    def make_generate(t=tile, at=actual_tile, s=source_data, dc=disk_cache, p=tile_parameter, c=compression, dn=dim_name, iw=is_widget, cmp=compressor):
+                        async def _gen():
+                            loop = asyncio.get_event_loop()
+                            d = await loop.run_in_executor(None, lambda: at.generate_from_data(s, cmp, compressed_dtype=s.dtype))
+                            dc.write_tile_2d(DEFAULT_VARIABLE_NAME if iw else p, c, dn, t, d)
+                        return _gen
+
+                    candidates.append(PreGenerationTask(
+                        label=label,
+                        cache_check=lambda t=tile, dc=disk_cache, p=tile_parameter, c=compression, dn=dim_name, iw=is_widget: dc.tile_2d_exists(DEFAULT_VARIABLE_NAME if iw else p, c, dn, t),
+                        generate=make_generate(),
+                    ))
+
+        if candidates:
+            logger.debug("[BGM] schedule 2d: %d candidates for %s iv=%d", len(candidates), tile_parameter, index_value)
+            self.background_gen_manager.schedule(candidates)
 
     def _maybe_schedule_pre_generation_3d(self, dataset, parameter: str,
                                            lod: int, tiles: list, cache_config: "DatasetCacheConfig",
@@ -2215,166 +2389,73 @@ class TileServer:
         disk_cache = override_disk_cache if dataset is None else self.dataset_tile_disk_caches.get(dataset.id)
         if not (cache_config.local_enabled and disk_cache is not None):
             return
-        if cache_config.pre_generation_offset_3d > 0:
-            z_values = list(set(t.tz for t in tiles if isinstance(t, Tile3D)))
-            for tz in z_values:
-                if dataset is None:
-                    self.background_gen_manager.submit(
-                        self._pre_generate_3d_widget(lod, tz,
-                                                     cache_config.pre_generation_offset_3d,
-                                                     cache_config.pre_generation_all_lods_3d, disk_cache)
-                    )
-                else:
-                    self.background_gen_manager.submit(
-                        self._pre_generate_3d(dataset, parameter, lod, tz,
-                                              cache_config.pre_generation_offset_3d,
-                                              cache_config.pre_generation_all_lods_3d)
-                    )
+        if cache_config.pre_generation_offset_3d <= 0:
+            return
 
-    async def _pre_generate_2d(self, dataset: "Dataset", parameter: str, index_dimension: "Dimension",
-                                foreground_iv: int, foreground_lod: int, visible_xys: list,
-                                offset: int, all_lods: bool) -> None:
-        loop = asyncio.get_event_loop()
-        is_anomaly = parameter.endswith(ANOMALY_PARAMETER_ID_SUFFIX)
-        real_parameter = parameter[:-len(ANOMALY_PARAMETER_ID_SUFFIX)] if is_anomaly else parameter
-        source_data, _ = open_parameter_data(dataset.ds, real_parameter)
+        offset = cache_config.pre_generation_offset_3d
+        all_lods = cache_config.pre_generation_all_lods_3d
         compression = self.tile_compressor.current_output_tile_format
-        dim_name = dataset.get_dimension_name(index_dimension)
-        disk_cache = self.dataset_tile_disk_caches.get(dataset.id)
-        index_max = [dataset.z_max, dataset.y_max, dataset.x_max][index_dimension.value]
-        lods_to_gen = range(0, dataset.max_lod_2d + 1) if all_lods else [foreground_lod]
+        compressor = self.tile_compressor
+        is_widget = dataset is None
 
-        for delta in range(-offset, offset + 1):
-            if delta == 0:
-                continue
-            raw_iv = foreground_iv + delta * dataset.pre_generation_sparsity_2d_tiles
-            iv = (raw_iv // dataset.pre_generation_sparsity_2d_tiles) * dataset.pre_generation_sparsity_2d_tiles
-            if iv < 0 or iv >= index_max:
-                continue
-            for gen_lod in lods_to_gen:
-                for (tx, ty) in visible_xys:
-                    tile = Tile2D(self.TILE_SIZE_2D, dataset.id, parameter, index_dimension, iv, gen_lod, tx, ty)
-                    if disk_cache and disk_cache.tile_2d_exists(parameter, compression, dim_name, tile):
-                        continue
-                    actual_tile = tile.get_anomaly_tile() if is_anomaly else tile
+        if is_widget:
+            source_data = self.data_source_proxy if self.use_data_source_proxy else self.data_source
+            depth, height, width = self.data_source.shape[:3]
+            max_lod = calculate_max_lod(self.TILE_SIZE_3D, list(self.data_source.shape[:3]))
+            lods_to_gen = range(0, max_lod + 1) if all_lods else [lod]
+            dataset_id = ""
+            tile_parameter = DEFAULT_VARIABLE_NAME
+            is_anomaly = False
+        else:
+            is_anomaly = parameter.endswith(ANOMALY_PARAMETER_ID_SUFFIX)
+            real_parameter = parameter[:-len(ANOMALY_PARAMETER_ID_SUFFIX)] if is_anomaly else parameter
+            source_data, _ = open_parameter_data(dataset.ds, real_parameter)
+            depth = dataset.z_max
+            height = dataset.y_max
+            width = dataset.x_max
+            lods_to_gen = range(0, dataset.max_lod_3d + 1) if all_lods else [lod]
+            dataset_id = dataset.id
+            tile_parameter = parameter
 
-                    def _gen(t=actual_tile, s=source_data):
-                        return t.generate_from_data(s, self.tile_compressor, compressed_dtype=s.dtype)
+        z_values = list(set(t.tz for t in tiles if isinstance(t, Tile3D)))
 
-                    try:
-                        d = await loop.run_in_executor(None, _gen)
-                    except asyncio.CancelledError:
-                        return
-                    if disk_cache:
-                        disk_cache.write_tile_2d(parameter, compression, dim_name, tile, d)
-
-    async def _pre_generate_3d(self, dataset: "Dataset", parameter: str, foreground_lod: int,
-                                foreground_tz: int, offset: int, all_lods: bool) -> None:
-        loop = asyncio.get_event_loop()
-        is_anomaly = parameter.endswith(ANOMALY_PARAMETER_ID_SUFFIX)
-        real_parameter = parameter[:-len(ANOMALY_PARAMETER_ID_SUFFIX)] if is_anomaly else parameter
-        source_data, _ = open_parameter_data(dataset.ds, real_parameter)
-        compression = self.tile_compressor.current_output_tile_format
-        disk_cache = self.dataset_tile_disk_caches.get(dataset.id)
-        lods_to_gen = range(0, dataset.max_lod_3d + 1) if all_lods else [foreground_lod]
-        depth = dataset.z_max
-
-        for delta in range(-offset, offset + 1):
-            if delta == 0:
-                continue
-            tz = foreground_tz + delta
-            if tz < 0:
-                continue
-            for gen_lod in lods_to_gen:
-                lod_factor = pow(0.5, gen_lod)
-                max_tz = math.ceil(lod_factor * depth / self.TILE_SIZE_3D) - 1
-                if tz > max_tz:
+        candidates: list[PreGenerationTask] = []
+        for tz_foreground in z_values:
+            for delta in range(-offset, offset + 1):
+                if delta == 0:
                     continue
-                x_tiles = math.ceil(lod_factor * dataset.x_max / self.TILE_SIZE_3D)
-                y_tiles = math.ceil(lod_factor * dataset.y_max / self.TILE_SIZE_3D)
-                for ty in range(y_tiles):
-                    for tx in range(x_tiles):
-                        tile = Tile3D(self.TILE_SIZE_3D, dataset.id, parameter, gen_lod, tx, ty, tz)
-                        if disk_cache and disk_cache.tile_3d_exists(parameter, compression, tile):
-                            continue
-                        actual_tile = tile.get_anomaly_tile() if is_anomaly else tile
-
-                        def _gen(t=actual_tile, s=source_data):
-                            return t.generate_and_compress_from_data(s, self.tile_compressor, compressed_dtype=s.dtype)
-
-                        try:
-                            d = await loop.run_in_executor(None, _gen)
-                        except asyncio.CancelledError:
-                            return
-                        if disk_cache:
-                            disk_cache.write_tile_3d(parameter, compression, tile, d)
-
-    async def _pre_generate_2d_widget(self, index_dimension: "Dimension", foreground_iv: int,
-                                       foreground_lod: int, visible_xys: list,
-                                       offset: int, all_lods: bool,
-                                       disk_cache: "TileDiskCache") -> None:
-        loop = asyncio.get_event_loop()
-        ds = self.data_source_proxy if self.use_data_source_proxy else self.data_source
-        compression = self.tile_compressor.current_output_tile_format
-        dim_name = self.widget_dim_names[index_dimension.value]
-        index_max = self.data_source.shape[index_dimension.value]
-        max_lod = calculate_max_lod(self.TILE_SIZE_2D, list(self.data_source.shape[:3]))
-        lods_to_gen = range(0, max_lod + 1) if all_lods else [foreground_lod]
-
-        for delta in range(-offset, offset + 1):
-            if delta == 0:
-                continue
-            iv = foreground_iv + delta
-            if iv < 0 or iv >= index_max:
-                continue
-            for gen_lod in lods_to_gen:
-                for (tx, ty) in visible_xys:
-                    tile = Tile2D(self.TILE_SIZE_2D, "", "", index_dimension, iv, gen_lod, tx, ty)
-                    if disk_cache.tile_2d_exists(DEFAULT_VARIABLE_NAME, compression, dim_name, tile):
-                        continue
-                    def _gen(t=tile, s=ds):
-                        return t.generate_from_data(s, self.tile_compressor, compressed_dtype=s.dtype)
-                    try:
-                        d = await loop.run_in_executor(None, _gen)
-                    except asyncio.CancelledError:
-                        return
-                    disk_cache.write_tile_2d(DEFAULT_VARIABLE_NAME, compression, dim_name, tile, d)
-
-    async def _pre_generate_3d_widget(self, foreground_lod: int, foreground_tz: int,
-                                       offset: int, all_lods: bool,
-                                       disk_cache: "TileDiskCache") -> None:
-        loop = asyncio.get_event_loop()
-        ds = self.data_source_proxy if self.use_data_source_proxy else self.data_source
-        compression = self.tile_compressor.current_output_tile_format
-        depth, height, width = self.data_source.shape[:3]
-        max_lod = calculate_max_lod(self.TILE_SIZE_3D, list(self.data_source.shape[:3]))
-        lods_to_gen = range(0, max_lod + 1) if all_lods else [foreground_lod]
-
-        for delta in range(-offset, offset + 1):
-            if delta == 0:
-                continue
-            tz = foreground_tz + delta
-            if tz < 0:
-                continue
-            for gen_lod in lods_to_gen:
-                lod_factor = pow(0.5, gen_lod)
-                max_tz = math.ceil(lod_factor * depth / self.TILE_SIZE_3D) - 1
-                if tz > max_tz:
+                tz = tz_foreground + delta
+                if tz < 0:
                     continue
-                x_tiles = math.ceil(lod_factor * width / self.TILE_SIZE_3D)
-                y_tiles = math.ceil(lod_factor * height / self.TILE_SIZE_3D)
-                for ty in range(y_tiles):
-                    for tx in range(x_tiles):
-                        tile = Tile3D(self.TILE_SIZE_3D, "", "", gen_lod, tx, ty, tz)
-                        if disk_cache.tile_3d_exists(DEFAULT_VARIABLE_NAME, compression, tile):
-                            continue
-                        def _gen(t=tile, s=ds):
-                            return t.generate_and_compress_from_data(s, self.tile_compressor, compressed_dtype=s.dtype)
-                        try:
-                            d = await loop.run_in_executor(None, _gen)
-                        except asyncio.CancelledError:
-                            return
-                        disk_cache.write_tile_3d(DEFAULT_VARIABLE_NAME, compression, tile, d)
+                for gen_lod in lods_to_gen:
+                    lod_factor = pow(0.5, gen_lod)
+                    max_tz = math.ceil(lod_factor * depth / self.TILE_SIZE_3D) - 1
+                    if tz > max_tz:
+                        continue
+                    x_tiles = math.ceil(lod_factor * width / self.TILE_SIZE_3D)
+                    y_tiles = math.ceil(lod_factor * height / self.TILE_SIZE_3D)
+                    for ty in range(y_tiles):
+                        for tx in range(x_tiles):
+                            tile = Tile3D(self.TILE_SIZE_3D, dataset_id, tile_parameter, gen_lod, tx, ty, tz)
+                            actual_tile = tile.get_anomaly_tile() if is_anomaly else tile
+                            label = f"3d {'widget' if is_widget else dataset_id}/{tile_parameter} tz={tz} lod={gen_lod} xy=({tx},{ty})"
+
+                            def make_generate(t=tile, at=actual_tile, s=source_data, dc=disk_cache, p=tile_parameter, c=compression, iw=is_widget, cmp=compressor):
+                                async def _gen():
+                                    loop = asyncio.get_event_loop()
+                                    d = await loop.run_in_executor(None, lambda: at.generate_and_compress_from_data(s, cmp, compressed_dtype=s.dtype))
+                                    dc.write_tile_3d(DEFAULT_VARIABLE_NAME if iw else p, c, t, d)
+                                return _gen
+
+                            candidates.append(PreGenerationTask(
+                                label=label,
+                                cache_check=lambda t=tile, dc=disk_cache, p=tile_parameter, c=compression, iw=is_widget: dc.tile_3d_exists(DEFAULT_VARIABLE_NAME if iw else p, c, t),
+                                generate=make_generate(),
+                            ))
+
+        if candidates:
+            logger.debug("[BGM] schedule 3d: %d candidates for %s", len(candidates), tile_parameter)
+            self.background_gen_manager.schedule(candidates)
 
     async def handle_event_request_standalone(self, socketio, sender_id, request_data):
         event_type = request_data["eventType"]
