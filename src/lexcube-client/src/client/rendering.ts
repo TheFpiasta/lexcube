@@ -1252,12 +1252,17 @@ class CubeRendering {
         this.tile3dVolumeRenderedCube.material.uniforms["pickedPosition"].value.set(x, y, z);
         this.tile3dVolumeRenderedCube.material.uniforms["pickedPositionActive"].value = hit;
         this.tile3dVolumeRenderedCube.material.uniforms["pickedPositionFeatureId"].value = featureId; // todo: handle featureId 0
-        this.renderRequested = true;
+        // Only redraw the cube when the picking-emphasis feature is active (pickingMode < 3); otherwise the uniforms have no visual effect and re-rendering on every hover is wasted work.
+        if (this.tile3dVolumeRenderedCube.material.uniforms["pickingMode"].value < 3) {
+            this.renderRequested = true;
+        }
     }
 
     hidePick3d() {
         this.tile3dVolumeRenderedCube.material.uniforms["pickedPositionActive"].value = false;
-        this.renderRequested = true;
+        if (this.tile3dVolumeRenderedCube.material.uniforms["pickingMode"].value < 3) {
+            this.renderRequested = true;
+        }
     }
 
     getCurrentCamera() {
