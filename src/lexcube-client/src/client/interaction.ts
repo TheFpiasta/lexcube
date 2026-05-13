@@ -1,21 +1,3 @@
-/*
-    Lexcube - Interactive 3D Data Cube Visualization
-    Copyright (C) 2022 Maximilian Söchting <maximilian.soechting@uni-leipzig.de>
-
-    This program is free software: you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 3 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program.  If not, see <https://www.gnu.org/licenses/>.
-*/
-
 import { Camera, Euler, Event, Intersection, IUniform, Object3D, OrthographicCamera, PerspectiveCamera, Ray, Raycaster, Vector2, Vector3 } from 'three'
 import { clamp, lerp } from 'three/src/math/MathUtils';
 import { CubeFace, Dimension, MAX_ZOOM_FACTOR, positiveModulo, range, TILE_SIZE_2D, API_VERSION, capitalizeString, ANOMALY_PARAMETER_ID_SUFFIX, DEFAULT_COLORMAP, TILE_SIZE_3D, roundDownToSparsity, roundUpToSparsity, roundToSparsity, DataType, WATER_RELATED_VARIABLE_KEYWORDS, MAXIMUM_SUPPORTED_LOD, FLOAT_NAN_REPLACEMENT_VALUE, roundToSparsityWithinRange, debounce, RaycastResultType, DeviceOrientation, HALF_FLOAT_NAN_REPLACEMENT_VALUE, NON_EXTREME_QUANTILE_INDEX, QUANTILE_STEP, QUANTILE_RELEVANT_DECIMALS } from './constants';
@@ -56,7 +38,7 @@ import { ActiveElement } from 'chart.js/dist/plugins/plugin.tooltip';
 import { ColormapUIManager, ColormapUIHostState } from './ui/colormap-ui';
 import { SliderUIManager, SliderUIHostState } from './ui/slider-ui';
 import { AnimationUIManager, AnimationUIHostState } from './ui/animation-ui';
-import { DataValue } from './services/tile-storage';
+import { DataValue } from './services/tile/storage';
 
 enum ContextLayerInteraction {
     Click,
@@ -64,230 +46,15 @@ enum ContextLayerInteraction {
     HoverLeave,
 }
 
-enum ExtremeThresholdTarget {
-    Observations,
-    DeviationsFromMSC
-}
-
-enum ExtremeThresholdType {
-    Absolute,
-    Quantile
-}
-
-enum ExtremeSpatialQuantileContext {
-    AllTimeSeries,
-    PcaGroupedTimeSeries,
-    SingleTimeSeries
-}
-
-class ExtremeType {
-    readonly id: number;
-    readonly name: string;
-    readonly thresholdTarget: ExtremeThresholdTarget;
-    readonly thresholdType: ExtremeThresholdType;
-    readonly spatialQuantileContext: ExtremeSpatialQuantileContext | null;
-
-    constructor(id: number, name: string, thresholdTarget: ExtremeThresholdTarget, thresholdType: ExtremeThresholdType, spatialQuantileContext: ExtremeSpatialQuantileContext | null = null) {
-        this.id = id;
-        this.name = name;
-        this.thresholdTarget = thresholdTarget;
-        this.thresholdType = thresholdType;
-        this.spatialQuantileContext = spatialQuantileContext;
-    }
-}
-
-
-// GeospatialContextCorrection moved to core/dimensions.ts
-
-class TimeSeries {
-    static nextId: number = 1;
-    id: number;
-    face: CubeFace;
-    x: number;
-    y: number;
-    data: number[];
-    labels: string[]; 
-    marker: Object3D | undefined;
-    pointColor: string;
-    private insertedDataLength: number = 0;
-
-    constructor(face: CubeFace, x: number, y: number, pointColor: string) {
-        this.id = TimeSeries.nextId++;
-        this.face = face;
-        this.x = x;
-        this.y = y;
-        this.data = [];
-        this.pointColor = pointColor;
-        this.labels = [];
-    }
-
-    getPointColor() {
-        return this.pointColor;
-    }
-
-    insertData(newData: number[], zStart: number, cubeInteraction: CubeInteraction) {
-        const insertedLength = Math.min(newData.length, this.data.length - zStart);
-        this.insertedDataLength += insertedLength;
-        this.data.splice(zStart, insertedLength, ...newData.slice(0, insertedLength).map((b) => cubeInteraction.getConvertedDataValue(b)));
-        return this.insertedDataLength >= this.data.length;
-    }
-
-    getRequestedDataRange() {
-        return {
-            indexDimension: Dimension.X,
-            globalX: this.x,
-            globalY: this.y,
-        }
-    }
-}
-
-// AnimationParameters moved to core/animation.ts
-// GeospatialContext moved to core/dimensions.ts
-
-class PickedDataValue {
-    face: CubeFace | undefined;
-    dataValue: number | Uint8Array;
-    isDataValueNotLoaded: boolean;
-    isDataNan: boolean | boolean[];
-    x: number;
-    y: number;
-    z: number;
-    lod: number;
-    tileX: number;
-    tileY: number;
-    tileZ: number | undefined;
-    localTilePixelX: number;
-    localTilePixelY: number;
-    localTilePixelZ: number | undefined;
-    maximumCompressionError: number | undefined;
-
-    constructor() {
-        this.dataValue = 0;
-        this.isDataValueNotLoaded = false;
-        this.isDataNan = false;
-        this.y = 0;
-        this.x = 0;
-        this.z = 0;
-        this.lod = 0;
-        this.tileX = 0;
-        this.tileY = 0;
-        this.localTilePixelX = 0;
-        this.localTilePixelY = 0;
-        this.maximumCompressionError = 0;
-    }
-
-    setFrom2dTileData(cubeSelection: CubeSelection, cubeDimensions: CubeDimensions, rendering: CubeRendering, tileData: TileData, selectedCubeId: string, selectedParameterId: string, face: number, uv: Vector2) {
-        const offset = cubeSelection.getDisplayOffsetVector2d(face).clone();
-        const size = cubeSelection.getDisplaySizeVector2d(face).clone();
-        const hoverPosition = size.multiply(uv).add(offset);
-        hoverPosition.x = positiveModulo(hoverPosition.x, cubeDimensions.totalWidthForFace(face))
-        const lod = rendering.lods2d[face];
-
-        const lodAdjustedTileSize = (Math.pow(2, lod) * TILE_SIZE_2D);
-        const tileX = Math.floor(hoverPosition.x / lodAdjustedTileSize);
-        const tileY = Math.floor(hoverPosition.y / lodAdjustedTileSize);
-        const uvWithinTileX = (hoverPosition.x % lodAdjustedTileSize) / lodAdjustedTileSize;
-        const uvWithinTileY = (hoverPosition.y % lodAdjustedTileSize) / lodAdjustedTileSize;
-        const pixelX = Math.floor(uvWithinTileX * TILE_SIZE_2D);
-        const pixelY = Math.floor(uvWithinTileY * TILE_SIZE_2D);
-        const dv = tileData.getTile2dDataValue(face, lod, tileX, tileY, pixelX, pixelY);
-
-        this.x = (face <= 3) ? hoverPosition.x : cubeSelection.getGuaranteedSparsityValidIndexValueForFace(face);
-        this.y = (face > 3) ? hoverPosition.x : ((face <= 1) ? hoverPosition.y : cubeSelection.getGuaranteedSparsityValidIndexValueForFace(face));
-        this.z = (face > 1) ? hoverPosition.y : cubeSelection.getGuaranteedSparsityValidIndexValueForFace(face);
-        this.face = face;
-        this.tileX = tileX;
-        this.tileY = tileY;
-        this.tileZ = undefined;
-        this.localTilePixelX = pixelX;
-        this.localTilePixelY = pixelY;
-        this.localTilePixelZ = undefined;
-        this.lod = lod;
-
-        const tile = new Tile2D(face, (face <= 1 ? this.z : (face <= 3 ? this.y : this.x)), lod, tileX, tileY, selectedCubeId, selectedParameterId);
-
-        return this.setFromDataValue(tileData, dv, tile);
-    }
-
-    setFrom3dTileData(globalVoxelPosition: Vector3, lod: number, cubeDimensions: CubeDimensions, tileData: TileData, selectedCubeId: string, selectedParameterId: string) {
-        // const offset = cubeSelection.getDisplayOffsetVector3d().clone();
-        // const size = cubeSelection.getDisplaySizeVector3d().clone();
-        globalVoxelPosition.x = positiveModulo(globalVoxelPosition.x, cubeDimensions.totalWidthForFace(CubeFace.Front));
-
-        const lodAdjustedTileSize = (Math.pow(2, lod) * TILE_SIZE_3D);
-        const tileCoords = globalVoxelPosition.clone().divideScalar(lodAdjustedTileSize).floor();
-        const uvWithinTile = globalVoxelPosition.clone().divideScalar(lodAdjustedTileSize);
-        uvWithinTile.sub(uvWithinTile.clone().floor());
-        const pixelWithinTileCoords = uvWithinTile.clone().multiplyScalar(TILE_SIZE_3D).floor();
-        const dv = tileData.getTile3dDataValue(lod, tileCoords.x, tileCoords.y, tileCoords.z, pixelWithinTileCoords.x, pixelWithinTileCoords.y, pixelWithinTileCoords.z);
-
-        this.x = globalVoxelPosition.x;
-        this.y = globalVoxelPosition.y;
-        this.z = globalVoxelPosition.z;
-        this.face = undefined;
-        this.tileX = tileCoords.x;
-        this.tileY = tileCoords.y;
-        this.tileZ = tileCoords.z;
-        this.localTilePixelX = pixelWithinTileCoords.x;
-        this.localTilePixelY = pixelWithinTileCoords.y;
-        this.localTilePixelZ = pixelWithinTileCoords.z;
-        this.lod = lod;
-
-        const tile = new Tile3D(lod, tileCoords.x, tileCoords.y, tileCoords.z, selectedCubeId, selectedParameterId);
-
-        this.setFromDataValue(tileData, dv, tile);
-    }
-
-    isFrom3d() {
-        const is3d = this.tileZ !== undefined && this.localTilePixelZ !== undefined && this.face === undefined;
-        const is2d = this.tileZ === undefined && this.localTilePixelZ === undefined && this.face !== undefined;
-        if (!is3d && !is2d) {
-            console.error("PickedDataValue is neither from 2d nor 3d tile data. This should not happen.");
-        }
-        return is3d;
-    }
-
-    private setFromDataValue(tileData: TileData, dv: DataValue, tile: Tile2D | Tile3D) {
-        this.maximumCompressionError = tileData.maxCompressionErrors.get(tile.getHashKey());
-        
-        this.dataValue = dv.value;
-        this.isDataValueNotLoaded = dv.isDataNotLoaded;
-        this.isDataNan = dv.isDataNan;
-
-        return this;
-    }
-
-    // getValue(cubeInteraction: CubeInteraction, selectedParameter: Parameter) {
-    //     if (this.isDataValueNotLoaded) {
-    //         return NaN;
-    //     } else if (typeof this.dataValue === "number") {
-    //         if (isNaN(this.dataValue) || this.isDataNan) {
-    //             return NaN;
-    //         }
-    //         return cubeInteraction.toFixedNumber(selectedParameter.getConvertedDataValue(this.dataValue));
-    //     } else if (this.dataValue instanceof Uint8Array) {
-    //         return this.dataValue[0];
-    //     }
-    //     throw new Error("No valid value for picked data value.");
-    // }
-
-    getString(cubeInteraction: CubeInteraction, selectedParameter: Parameter, prefix: string = "") {
-        if (this.isDataValueNotLoaded) {
-            return `${prefix}Data not yet loaded`;
-        } else if (typeof this.dataValue === "number") {
-            if (isNaN(this.dataValue) || this.isDataNan) {
-                return `${prefix}No Data`;
-            } else {
-                const value = `${cubeInteraction.toFixed(selectedParameter.getConvertedDataValue(this.dataValue))}`;
-                return `${prefix}${value} ${selectedParameter.getUnitHTML()}`;
-            }
-        } else if (this.dataValue instanceof Uint8Array) {
-            const lines = selectedParameter.getRgbDataValueString(this.dataValue, this.isDataNan);
-            return lines;
-        }
-        return "No valid string for picked data value.";
-    }
-}
+import {
+    ExtremeThresholdTarget,
+    ExtremeThresholdType,
+    ExtremeSpatialQuantileContext,
+    ExtremeType,
+    ExtremeEvent,
+} from './interaction/extreme-types';
+import { TimeSeries } from './interaction/time-series';
+import { PickedDataValue } from './interaction/picked-data';
 
 
 // SelectionState, CubeSelection moved to core/selection.ts
@@ -3739,33 +3506,6 @@ class CubeInteraction {
         this.htmlVolumeVizEventExploreLink.textContent = `Explore ${events.length} events >`;
     }
 
-}
-
-class ExtremeEvent {
-    constructor(public eventIndex: number, public startIndex: number, public endIndex: number, public minXIndex: number, public maxXIndex: number, public minYIndex: number, public maxYIndex: number, public areaKm2: number, public nObservations: number) {}
-
-    static fromDataView(eventIndex: number, dataView: DataView, offset: number): ExtremeEvent {
-        const startIndex = dataView.getUint16(offset, true);
-        const endIndex = dataView.getUint16(offset + 2, true);
-        const minXIndex = dataView.getUint16(offset + 4, true);
-        const maxXIndex = dataView.getUint16(offset + 6, true);
-        const minYIndex = dataView.getUint16(offset + 8, true);
-        const maxYIndex = dataView.getUint16(offset + 10, true);
-        const areaKm2 = dataView.getUint32(offset + 12, true);
-        const nObservations = dataView.getUint32(offset + 16, true);
-        return new ExtremeEvent(eventIndex, startIndex, endIndex, minXIndex, maxXIndex, minYIndex, maxYIndex, areaKm2, nObservations);
-    }
-
-    toTableRow(cubeDimensions: CubeDimensions): string {
-        const firstTimeIndex = cubeDimensions.z.getIndexString(this.startIndex);
-        const lastTimeIndex = cubeDimensions.z.getIndexString(this.endIndex);
-        const durationString = cubeDimensions.z.getDifferenceString(this.endIndex - this.startIndex + 1).differenceString;
-        // const timeRangeString = firstTimeIndex == lastTimeIndex ? firstTimeIndex : `${firstTimeIndex} /<br>${lastTimeIndex}`;
-        const timeRangeString = `${firstTimeIndex}<br>+ ca. ${durationString}`;
-        const spaceCoverageString = `${(this.areaKm2 / 1000).toFixed(0)}k km²<br>(${this.maxXIndex - this.minXIndex + 1}×${this.maxYIndex - this.minYIndex + 1})`;
-        const centerXYString = `${cubeDimensions.x.getIndexString(Math.floor((this.minXIndex + this.maxXIndex) / 2))} / ${cubeDimensions.y.getIndexString(Math.floor((this.minYIndex + this.maxYIndex) / 2))}`;  
-        return `<tr><td>#${this.eventIndex}</td><td>${this.nObservations} obs</td><td>${timeRangeString}</td><td>${spaceCoverageString}</td><td>${centerXYString}</td></tr>`;
-    }
 }
 
 export { CubeInteraction }

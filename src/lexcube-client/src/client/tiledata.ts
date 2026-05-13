@@ -1,21 +1,3 @@
-/*
-    Lexcube - Interactive 3D Data Cube Visualization
-    Copyright (C) 2022 Maximilian Söchting <maximilian.soechting@uni-leipzig.de>
-
-    This program is free software: you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 3 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program.  If not, see <https://www.gnu.org/licenses/>.
-*/
-
 import { Vector2, Vector3 } from 'three'
 
 import { CubeFace, Dimension, TILE_SIZE_2D, DataType, TileRequestIntention } from './constants';
@@ -24,8 +6,8 @@ import { CubeClientContext } from './client';
 import { TileTextureView2DUpdateResult, TileTextureView3DUpdateResult } from './rendering/tile-texture-views';
 import { Tile2D, Tile3D, Tile3DClipBoundary } from './core/tiles';
 import { Colormap } from './core/colormap';
-import { DecompressedTileResult, TileDecompressor } from './services/tile-decompression';
-import { StorageUsage, TileStorage } from './services/tile-storage';
+import { DecompressedTileResult, TileDecompressor } from './services/tile/decompression';
+import { StorageUsage, TileStorage } from './services/tile/storage';
 import { ParameterRange } from './interaction';
 
 // Tile2D, Tile3D, Tile3DClipBoundary moved to core/tiles.ts
