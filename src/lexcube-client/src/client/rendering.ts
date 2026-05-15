@@ -1,21 +1,3 @@
-/*
-    Lexcube - Interactive 3D Data Cube Visualization
-    Copyright (C) 2022 Maximilian Söchting <maximilian.soechting@uni-leipzig.de>
-
-    This program is free software: you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 3 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program.  If not, see <https://www.gnu.org/licenses/>.
-*/
-
 import { AmbientLight, BoxGeometry, DataTexture, DirectionalLight, FloatType, Mesh, MeshBasicMaterial, OrthographicCamera, PerspectiveCamera, Raycaster, RedFormat, RGBAFormat, RGBFormat, Scene, ShaderMaterial, Triangle, Vector2, Vector3, WebGLRenderer, Line, BufferGeometry, Object3D, LineBasicMaterial, Frustum, Matrix4, Plane, Box3, LineSegments, Float32BufferAttribute, SphereGeometry, MeshStandardMaterial, CylinderGeometry, AnimationMixer, AnimationClip, NumberKeyframeTrack, KeyframeTrack, InterpolateSmooth, BooleanKeyframeTrack, Clock, AnimationAction, AddEquation, CustomBlending, OneMinusSrcAlphaFactor, SrcAlphaFactor, Color, MaxEquation, OneFactor, MinEquation, AlwaysStencilFunc, ReplaceStencilOp, GridHelper, Euler, UniformsUtils, BackSide, EdgesGeometry, Ray, IUniform, PCFSoftShadowMap, Event, LoopOnce, MeshPhongMaterial, MathUtils, AxesHelper, PlaneGeometry, DoubleSide, BufferAttribute, AdditiveBlending, LinearFilter, WebGLRenderTarget, NearestFilter, Matrix3, NeverDepth, AlwaysDepth, UnsignedByteType, WebGLArrayRenderTarget, BasicShadowMap, CameraHelper, FrontSide, PCFShadowMap, ClampToEdgeWrapping, GLSL3, RedIntegerFormat, UnsignedIntType } from 'three';
 import { clamp, inverseLerp, lerp } from 'three/src/math/MathUtils';
 import { toPng, toCanvas, getFontEmbedCSS, toBlob } from 'html-to-image';
@@ -1270,12 +1252,17 @@ class CubeRendering {
         this.tile3dVolumeRenderedCube.material.uniforms["pickedPosition"].value.set(x, y, z);
         this.tile3dVolumeRenderedCube.material.uniforms["pickedPositionActive"].value = hit;
         this.tile3dVolumeRenderedCube.material.uniforms["pickedPositionFeatureId"].value = featureId; // todo: handle featureId 0
-        this.renderRequested = true;
+        // Only redraw the cube when the picking-emphasis feature is active (pickingMode < 3); otherwise the uniforms have no visual effect and re-rendering on every hover is wasted work.
+        if (this.tile3dVolumeRenderedCube.material.uniforms["pickingMode"].value < 3) {
+            this.renderRequested = true;
+        }
     }
 
     hidePick3d() {
         this.tile3dVolumeRenderedCube.material.uniforms["pickedPositionActive"].value = false;
-        this.renderRequested = true;
+        if (this.tile3dVolumeRenderedCube.material.uniforms["pickingMode"].value < 3) {
+            this.renderRequested = true;
+        }
     }
 
     getCurrentCamera() {

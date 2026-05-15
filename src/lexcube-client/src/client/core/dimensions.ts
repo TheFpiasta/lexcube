@@ -1,30 +1,13 @@
-/*
-    Lexcube - Interactive 3D Data Cube Visualization
-    Copyright (C) 2022 Maximilian Söchting <maximilian.soechting@uni-leipzig.de>
-
-    This program is free software: you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 3 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program.  If not, see <https://www.gnu.org/licenses/>.
-*/
-
 import { Vector2, Vector3 } from 'three';
 import { clamp } from 'three/src/math/MathUtils';
-import { CubeFace, Dimension, TILE_SIZE_2D, TILE_SIZE_3D, capitalizeString, roundUpToSparsity, roundDownToSparsity } from '../constants';
+import { CubeFace, Dimension, TILE_SIZE_2D, TILE_SIZE_3D, capitalizeString } from '../constants';
 import type { Tile2D } from '../tiledata';
 import type { CubeClientContext } from '../client';
+import { GeospatialRange, ParameterRange, getDayString, getTimeString } from './ranges';
+import { GeospatialContext } from './geospatial-context';
 
-// ============================================================================
-// Enums
-// ============================================================================
+export { GeospatialRange, ParameterRange, getDayString, getTimeString } from './ranges';
+export { GeospatialContext, GeospatialContextCorrection } from './geospatial-context';
 
 export enum CubeDimensionType {
     Generic = 0,
@@ -33,254 +16,22 @@ export enum CubeDimensionType {
     Longitude = 3,
 }
 
-export enum GeospatialContextCorrection {
-    None,
-    AddHalfStepAtBothEnds,
-    AddFullStepAtEnd,
+export enum CubeTag {
+    SpectralIndices,
+    Global,
+    AnomaliesOnly,
+    Hainich,
+    Auwald,
+    ESDC,
+    ESDC2,
+    ESDC3,
+    ECMWF,
+    ColormappingFromObservedValues,
+    LongitudeZeroIndexIsGreenwich,
+    CamsEac4Reanalysis,
+    OverflowX,
+    Era5SpecificHumidity
 }
-
-// ============================================================================
-// Helper Functions
-// ============================================================================
-
-function padDateElement(number: Number, amount: Number = 2) {
-    return `00${number}`.slice(-amount);
-}
-
-export function getDayString(date: Date) {
-    return `${padDateElement(date.getUTCDate())}.${padDateElement(date.getUTCMonth() + 1)}.${date.getUTCFullYear()}`;
-}
-
-export function getTimeString(date: Date, millisecondsDisplayed: boolean) {
-    return `${padDateElement(date.getUTCHours())}:${padDateElement(date.getUTCMinutes())}:${padDateElement(date.getUTCSeconds())}${millisecondsDisplayed ? `:${padDateElement(date.getUTCMilliseconds(), 3)}` : ""}`;
-}
-
-// ============================================================================
-// GeospatialRange - Pure data class for geographic coordinate ranges
-// ============================================================================
-
-export class GeospatialRange {
-    private first: number;
-    private last: number;
-    ascending: boolean = true;
-    min: number;
-    max: number;
-
-    constructor(first: number, last: number, overflowAllowed: boolean = false, overflowRange: number = 0) {
-        this.first = first;
-        this.last = last;
-        if (this.first > this.last && overflowAllowed) {
-            this.last += overflowRange;
-        }
-        this.min = Math.min(this.first, this.last);
-        this.max = Math.max(this.first, this.last);
-        this.ascending = this.first < this.last;
-    }
-
-    getFirst() {
-        return this.first;
-    }
-
-    getLast() {
-        return this.last;
-    }
-
-    range() {
-        return Math.abs(this.last - this.first);
-    }
-
-    middle() {
-        return this.first + (this.last - this.first) / 2;
-    }
-
-    setFromMinMaxAscending(min: number, max: number, ascending: boolean) {
-        if (ascending) {
-            this.first = min;
-            this.last = max;
-        } else {
-            this.first = max;
-            this.last = min;
-        }
-        this.ascending = ascending;
-        this.min = Math.min(this.first, this.last);
-        this.max = Math.max(this.first, this.last);
-    }
-
-    set(first: number, last: number) {
-        this.first = first;
-        this.last = last;
-        this.ascending = first < last;
-        this.min = Math.min(this.first, this.last);
-        this.max = Math.max(this.first, this.last);
-    }
-
-    isValid() {
-        return !isNaN(this.first) && !isNaN(this.last) && this.first != this.last;
-    }
-
-    relativeWithin(x: number) {
-        return (x - this.min) / this.range();
-    }
-
-    getValueWithin(p: number) {
-        if (this.ascending) {
-            return this.getFirst() + p * this.range();
-        } else {
-            return this.getFirst() - p * this.range();
-        }
-    }
-
-    toString() {
-        return `${this.first}-${this.last}`;
-    }
-}
-
-// ============================================================================
-// ParameterRange - Range with validation for sparsity constraints
-// ============================================================================
-
-export class ParameterRange {
-    min: number;
-    max: number; // Upper bound is EXCLUSIVE
-
-    private savedLength: number = 0; // for floating point precision issues
-    private validateSize: boolean = false;
-    static sparsity: number = 1;
-
-    constructor(min: number = 0, max: number = 0, validateSize: boolean = false) {
-        this.min = min;
-        this.max = max;
-        this.validateSize = validateSize;
-    }
-
-    public length() {
-        if (this.savedLength > 0 && Math.abs(this.savedLength - (this.max - this.min)) < 1e-6) {
-            return this.savedLength;
-        }
-        return this.max - this.min;
-    }
-
-    range() {
-        return Math.abs((this.max) - this.min);
-    }
-
-    middle() {
-        return this.min + ((this.max) - this.min) / 2;
-    }
-
-    public toString(roundedToSparsity: boolean = false) {
-        const min = roundedToSparsity ? roundUpToSparsity(this.min, ParameterRange.sparsity) : this.min;
-        const max = roundedToSparsity ? (roundDownToSparsity(this.max, ParameterRange.sparsity)) : this.max;
-        return `${min}-${max}`;
-    }
-
-    subRangeOf(outerRange: ParameterRange, overflowAllowed: boolean = false) {
-        if (overflowAllowed) {
-            return this.min >= outerRange.min && this.max <= outerRange.max * 2;
-        }
-        return this.min >= outerRange.min && this.max <= outerRange.max;
-    }
-
-    copy(other: ParameterRange) {
-        this.min = other.min;
-        this.max = other.max;
-        this.validateSize = other.validateSize;
-        this.validate();
-        return this;
-    }
-
-    set(min: number, max: number, finalChange: boolean = true, length: number = 0) {
-        this.min = min;
-        this.max = max;
-        this.savedLength = length;
-        if (finalChange) {
-            this.validate();
-        }
-        return this;
-    }
-
-    static copyFrom(other: ParameterRange): ParameterRange {
-        return new ParameterRange().copy(other);
-    }
-
-    clone(): ParameterRange {
-        return new ParameterRange().copy(this);
-    }
-
-    equals(other: ParameterRange) {
-        return this.min == other.min && this.max == other.max;
-    }
-
-    private validate() {
-        if (!this.validateSize) {
-            return;
-        }
-        const minValid = this.min % ParameterRange.sparsity == 0;
-        const maxValid = (this.max - 1) % ParameterRange.sparsity == 0;
-        if (!minValid || !maxValid) {
-            throw new Error(`Invalid range ${this} for sparsity ${ParameterRange.sparsity}`);
-        }
-    }
-}
-
-// ============================================================================
-// GeospatialContext - Manages geospatial coordinate context for a cube
-// ============================================================================
-
-export class GeospatialContext {
-    xRange: GeospatialRange = new GeospatialRange(NaN, NaN);
-    yRange: GeospatialRange = new GeospatialRange(NaN, NaN);
-
-    setGlobalCoverage() {
-        this.xRange.set(-180, 180);
-        this.yRange.set(-90, 90);
-    }
-
-    setFromDimensions(cubeDimensions: CubeDimensions, xCorrection: GeospatialContextCorrection, yCorrection: GeospatialContextCorrection) {
-        if (!cubeDimensions.x.hasNumericIndices() || !cubeDimensions.y.hasNumericIndices()) {
-            return "Indices are not numeric, not setting geospatial context.";
-        }
-        const xBounds = [cubeDimensions.x.indices[0] as number, cubeDimensions.x.indices[cubeDimensions.x.indices.length - 1] as number];
-        const xAscending = xBounds[0] < xBounds[1];
-        const xMin = Math.min(...xBounds);
-        const xMax = Math.max(...xBounds);
-        const yBounds = [cubeDimensions.y.indices[0] as number, cubeDimensions.y.indices[cubeDimensions.y.indices.length - 1] as number];
-        const yAscending = yBounds[0] < yBounds[1];
-        const yMin = Math.min(...yBounds);
-        const yMax = Math.max(...yBounds);
-
-        const xStep = Math.abs(xMax - xMin) / (cubeDimensions.x.steps - 1);
-        const yStep = Math.abs(yMax - yMin) / (cubeDimensions.y.steps - 1);
-
-        if (xCorrection == GeospatialContextCorrection.AddHalfStepAtBothEnds) {
-            this.xRange.setFromMinMaxAscending(xMin - xStep / 2, xMax + xStep / 2, xAscending);
-        } else if (xCorrection == GeospatialContextCorrection.AddFullStepAtEnd) {
-            this.xRange.setFromMinMaxAscending(xMin, xMax + xStep, xAscending);
-        } else if (xCorrection == GeospatialContextCorrection.None) {
-            this.xRange.setFromMinMaxAscending(xMin, xMax, xAscending);
-        } else {
-            console.error("Unknown geospatial context xCorrection type: " + xCorrection);
-        }
-        if (yCorrection == GeospatialContextCorrection.AddHalfStepAtBothEnds) {
-            this.yRange.setFromMinMaxAscending(yMin - yStep / 2, yMax + yStep / 2, yAscending);
-        } else if (yCorrection == GeospatialContextCorrection.AddFullStepAtEnd) {
-            this.yRange.setFromMinMaxAscending(yMin, yMax + yStep, yAscending);
-        } else if (yCorrection == GeospatialContextCorrection.None) {
-            this.yRange.setFromMinMaxAscending(yMin, yMax, yAscending);
-        } else {
-            console.error("Unknown geospatial context yCorrection type: " + yCorrection);
-        }
-        return `xRange set to [${this.xRange.min}, ${this.xRange.max}] (using correction ${GeospatialContextCorrection[xCorrection]} from ${xBounds[0]} to ${xBounds[1]}). yRange set to [${this.yRange.min}, ${this.yRange.max}] (using correction ${GeospatialContextCorrection[yCorrection]} from ${yBounds[0]} to ${yBounds[1]}).`;
-    }
-
-    isValid() {
-        return this.xRange.isValid() && this.yRange.isValid();
-    }
-}
-
-// ============================================================================
-// CubeDimension - Represents a single dimension of the data cube
-// ============================================================================
 
 export class CubeDimension {
     private name: string = "Generic Dimension";
@@ -493,28 +244,6 @@ export class CubeDimension {
         }
         return -1;
     }
-}
-
-// ============================================================================
-// CubeDimensions - Collection of three dimensions forming the cube
-// ============================================================================
-
-// CubeTag enum needed for CubeDimension.getIndexString
-export enum CubeTag {
-    SpectralIndices,
-    Global,
-    AnomaliesOnly,
-    Hainich,
-    Auwald,
-    ESDC,
-    ESDC2,
-    ESDC3,
-    ECMWF,
-    ColormappingFromObservedValues,
-    LongitudeZeroIndexIsGreenwich,
-    CamsEac4Reanalysis,
-    OverflowX,
-    Era5SpecificHumidity
 }
 
 export class CubeDimensions {
