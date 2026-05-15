@@ -73,7 +73,7 @@ class Cube3DWidget(widgets.DOMWidget):
 
     def __init__(self, data_source, cmap: Union[str, list, None] = None, vmin: Union[float, None] = None, vmax: Union[float, None] = None, isometric_mode: bool = False, use_lexcube_chunk_caching: bool = True, overlaid_geojson: Unicode = "", overlaid_geojson_color: Unicode = "black", widget_size: tuple = None, cube_scale: list = None, camera_angle: list = None, force_float32_for_voxel_mode: bool = False,
                  cache_memory_enabled: bool = True,
-                 cache_local_enabled: bool = True,
+                 cache_local_enabled: bool = False,
                  cache_local_dir: str = "",
                  cache_local_max_cache_gb: float = 10.0,
                  cache_local_pre_generation_offset_2d: int = 0,
